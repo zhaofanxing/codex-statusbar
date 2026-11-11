@@ -183,9 +183,19 @@ internal static class SelfTest
             CodexThemeSource.Parse(["appearanceTheme = \"solarized\""]), CodexThemeKind.Unknown);
         Check("Codex theme: a trailing comment is tolerated",
             CodexThemeSource.Parse(["appearanceTheme = \"light\"  # or dark"]), CodexThemeKind.Light);
-        Check("Codex theme: the real config file on this machine parses",
-            CodexThemeSource.Read(CodexThemeSource.DefaultConfigPath) != CodexThemeKind.Unknown,
-            true);
+        // CI runners and fresh installs need not have Codex's private configuration. Exercise the
+        // production file reader against an isolated file instead of depending on the user's theme.
+        var themePath = Path.Combine(Path.GetTempPath(), "codex-statusbar-theme-" + Guid.NewGuid().ToString("N") + ".toml");
+        try
+        {
+            File.WriteAllLines(themePath, ["[desktop]", "appearanceTheme = \"light\""]);
+            Check("Codex theme: an isolated config file parses",
+                CodexThemeSource.Read(themePath), CodexThemeKind.Light);
+        }
+        finally
+        {
+            File.Delete(themePath);
+        }
     }
 
     /// <summary>Folds the whole position suite into the default gate instead of duplicating it.</summary>

@@ -266,6 +266,30 @@ not modify anything outside the repository, and the overlay never writes outside
 Requirements: Windows 10/11 x64, Codex Desktop running under the same user. The strip can start
 before Codex and wait in the tray; it appears when a Codex window is available and in the foreground.
 
+### Automated releases
+
+Push a new version tag to run [Release Windows](.github/workflows/release.yml):
+
+```powershell
+git tag v1.0.0-rc4
+git push origin v1.0.0-rc4
+```
+
+The tag sets the EXE and package version. Tags with a suffix such as `-rc4` create prereleases;
+tags such as `v1.0.0` create regular releases. No personal access token is needed: the publish job
+uses GitHub's built-in `GITHUB_TOKEN`.
+
+The workflow builds and self-tests on Windows, then publishes the EXE, complete ZIP, launcher,
+both license files, third-party notices and `SHA256SUMS.txt`. Licenses and notices are also inside
+the ZIP. All uploaded checksums are verified before the release draft becomes public.
+Existing published versions are not overwritten.
+
+Use **Actions → Release Windows → Run workflow** for a build-only check. Its files are available
+as the `release-package` artifact; a manual run does not publish a Release.
+If publishing fails, prefer **Re-run failed jobs** to reuse the original artifact. If that artifact
+has expired or a rebuild changes its hashes, use a new version tag.
+See [release maintenance](agent-docs/release-automation.md) for the file contract and verification steps.
+
 ### Command line
 
 | flag | effect |

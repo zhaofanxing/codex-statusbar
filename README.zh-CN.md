@@ -242,6 +242,28 @@ pwsh -File build.ps1 -SkipTest    # build + publish only
 运行要求：Windows 10/11 x64，且 Codex Desktop 在同一用户下运行。状态条可以先于 Codex 启动，
 它会在托盘等待；Codex 窗口出现并位于前台后自动显示。
 
+### 自动发布版本
+
+推送新的版本标签即可触发 [Release Windows](.github/workflows/release.yml)：
+
+```powershell
+git tag v1.0.0-rc4
+git push origin v1.0.0-rc4
+```
+
+标签决定 EXE 和发布包的版本号。带 `-rc4` 等后缀的标签生成预发布版本，`v1.0.0` 这类标签生成
+正式版本。无需配置个人访问令牌，发布任务使用 GitHub 内置的 `GITHUB_TOKEN`。
+
+工作流在 Windows 上构建并执行自测，随后发布 EXE、完整 ZIP、启动脚本、两份许可证、第三方声明
+和 `SHA256SUMS.txt`。ZIP 内也会保留许可证与声明；上传后的校验值全部核对通过，才会公开 Release
+草稿。已经发布的同名版本不会被覆盖。
+
+可在 **Actions → Release Windows → Run workflow** 手动执行只构建验证，从该次运行的
+`release-package` artifact 下载文件；手动运行不发布 Release。
+发布失败时优先选择 **Re-run failed jobs**，复用原构建文件；artifact 过期或重建后的哈希不同时，
+应使用新的版本标签。
+文件契约与维护说明见[版本发布与 GitHub Actions](agent-docs/release-automation.md)。
+
 ### 命令行
 
 | 参数 | 作用 |
