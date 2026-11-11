@@ -213,7 +213,7 @@ self-contained, so no .NET runtime is needed. No administrator rights, and nothi
 
 | command | what it does |
 |---|---|
-| `--self-test [fixturesDir]` | drives the real parser, formatter, position calculator, settings serialiser, identity rule, lifecycle ladder and the position fast path; **296 checks** with the repository's fixtures, **268** on a bare exe (the fixture sections are skipped with a note). Exit 0 on success |
+| `--self-test [fixturesDir]` | drives the real parser, formatter, position calculator, settings serialiser, identity rule, lifecycle ladder and the position fast path; **347 checks** with the bundled fixtures (without fixtures, those sections are skipped with a note). Includes a read-only integration check of the local Codex theme. Exit 0 on success |
 | `--debug` | writes the metric block, the `[position]` block, the `[position-performance]` block, the `[lifecycle]` block and a timestamped event for every transition |
 | `--position-fast-debug` | implies `--debug` and summarises the position pipeline once a second instead of only when something changes |
 | `--background` / `--watch-codex` | the logon mode: tray only, no window |
@@ -276,11 +276,13 @@ the `Detections` heartbeat stays frozen for the whole attached sample.
 ## 7. Verify this exact build
 
 ```
-CodexStatusbar.exe --self-test
+CodexStatusbar.exe --self-test fixtures
 ```
 
-Expected: `checks: 268   failures: 0` / `RESULT: PASS`, exit code 0 for the bare exe; 296 with the
-repository's `fixtures\` directory. A fixtures path that does not exist is a failure and exits 1.
+Verified: `checks: 347   failures: 0` / `RESULT: PASS`, exit code 0 with the bundled `fixtures\`
+directory. The suite reads the local Codex theme configuration, so that integration check requires
+an accessible configuration with a supported appearance setting. A fixtures path that does not
+exist is a failure and exits 1.
 
 ```
 Version:      1.0.0-rc3

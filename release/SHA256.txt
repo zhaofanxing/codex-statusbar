@@ -1,16 +1,18 @@
 CodexStatusbar 1.0.0-rc3 — SHA-256
 ===================================
 
-  8915F44B1A228FB7DD185BABF8E1A1CF8ED0C97A1001EDD6A067C3CFC98D3F0B  CodexStatusbar.exe
+  3607678B1A8056F8BFBF0292C1D17A2414A7B5B31493DE4E59EAA0C6569BF5DC  CodexStatusbar.exe
 
-Size           : 64,320,805 bytes (61.3 MB)
+Size           : 64,360,254 bytes (61.4 MiB)
 Binary version : 1.0.0-rc3
 Runtime        : self-contained win-x64 single file (no .NET runtime required)
+Build SDK      : .NET 10.0.403
+Source commit  : f49daba490fe4c3946c5dddbe95dee05ae416049
 
 Self-test (run it yourself):
 
-  CodexStatusbar.exe --self-test                 -> 268 checks, 0 failures, exit 0
-  CodexStatusbar.exe --self-test fixtures        -> 296 checks, 0 failures, exit 0
+  CodexStatusbar.exe --self-test fixtures        -> 347 checks, 0 failures, exit 0
 
-The bare form skips the two fixture-driven sections (the fixtures live in the repository)
-and says so; it still exits 0, because "the files are not beside this exe" is not a failure.
+The release ZIP includes fixtures for the full suite. Without them, fixture-driven sections
+are skipped. The suite also includes a read-only integration check of the local Codex theme;
+that check requires an accessible Codex configuration with a supported appearance setting.

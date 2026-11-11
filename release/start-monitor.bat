@@ -1,7 +1,7 @@
 @echo off
 setlocal
 rem ---------------------------------------------------------------
-rem  CodexStatusbar 1.0.0-rc1 - launcher
+rem  CodexStatusbar 1.0.0-rc3 - launcher
 rem
 rem    start-monitor.bat            start the overlay (normal use)
 rem    start-monitor.bat --debug    start it and write the debug log

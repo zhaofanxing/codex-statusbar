@@ -586,7 +586,7 @@ CodexStatusbar.exe --hotkey-probe out.json      # Ctrl+Alt+Shift+P (fails by des
 ## 6. 自己验证这些数字
 
 ```
-CodexStatusbar.exe --self-test fixtures            # 296 checks over the production code (268 without fixtures)
+CodexStatusbar.exe --self-test fixtures            # 使用 fixtures 对生产代码执行 347 项检查
 python tools\verify_metrics.py          # real conversations, raw vs derived
 python tools\make_fixtures.py           # deterministic fixtures + assertions
 python tools\verify_tail_recovery.py    # bounded-tail recovery == full parse
