@@ -311,6 +311,11 @@ anyway*). That is expected for a release candidate.
 
 ## 9. License
 
-MIT — see `LICENSE`. This project is a derivative of **codex-token-overlay** by *soleillevant0125*;
-the attributions are kept in `THIRD-PARTY-NOTICES.md` and the upstream licence text in
-`LICENSE-codex-token-overlay`. Not developed, endorsed or supported by OpenAI.
+MIT — see [`LICENSE`](../LICENSE). This repository is a modified version of
+[dongyue-19/codex-statusbar](https://github.com/dongyue-19/codex-statusbar), which is based on
+**codex-token-overlay** by *soleillevant0125*. Design ideas and TPS methodology also come from
+**codex-monitor-hud** (now **agent-monitor-hud**) and **codex-model-benchmarks**, respectively.
+The upstream sources and reuse details are listed in
+[`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md); the base project's license text is preserved in
+[`LICENSE-codex-token-overlay`](../LICENSE-codex-token-overlay). Include these notices and license
+files when redistributing source or binary packages. Not developed, endorsed or supported by OpenAI.

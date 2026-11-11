@@ -6,6 +6,10 @@
 
 <https://github.com/zhaofanxing/codex-statusbar> · MIT 许可 · **v1.0.0-rc3**（release candidate，功能已冻结）
 
+**项目来源：** 本仓库基于 [dongyue-19/codex-statusbar](https://github.com/dongyue-19/codex-statusbar)
+继续修改和维护。上游项目、复用范围与保留的许可声明详见[致谢与许可](#8-致谢与许可)和
+[第三方声明](THIRD-PARTY-NOTICES.md)。
+
 **获取可执行文件：** 从 [最新 release](https://github.com/zhaofanxing/codex-statusbar/releases) 下载
 `CodexStatusbar.exe` —— 自包含的 61 MB 单文件，不需要安装 .NET 运行时 —— 把它放到
 `start-monitor.bat` 旁边然后运行该脚本。exe 是 release 附件而不是提交进仓库的文件，因此仓库体积
@@ -688,14 +692,20 @@ schema，这样事件词汇表可以对着任何未来版本重新核对而不�
 
 ## 8. 致谢与许可
 
+本仓库的直接来源是 **dongyue-19/codex-statusbar**
+（<https://github.com/dongyue-19/codex-statusbar>，MIT），并在其基础上进行了本地修改。上游的版权声明与
+MIT 许可原文保留在 [`LICENSE`](LICENSE) 中；以下继承的致谢同时保留在
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) 中。
+
 本项目是在 **codex-token-overlay**（作者 *soleillevant0125*，
 <https://github.com/soleillevant0125/codex-token-overlay>，MIT）基础上修改而来。从它复用了：
 Win32 的 Codex 窗口定位与分类器、带 `WS_EX_TOOLWINDOW/NOACTIVATE` 的覆盖窗口、窗口跟随循环、
 手动附着/吸附、主题处理，以及设置/托盘外壳。它的 MIT 许可原文保留在
 `LICENSE-codex-token-overlay`。
 
-设计思路另取自 **codex-monitor-hud**（作者 *LH-03*，<https://github.com/LH-03/codex-monitor-hud>，
-MIT）：只读访问 `state_5.sqlite` 的 `threads` 表、`originator == "Codex Desktop"` 根会话过滤，
+设计思路另取自 **codex-monitor-hud**（现名 **agent-monitor-hud**；作者 *LH-03*，
+<https://github.com/LH-03/agent-monitor-hud>，MIT）：只读访问 `state_5.sqlite` 的 `threads` 表、
+`originator == "Codex Desktop"` 根会话过滤，
 以及有界尾部读取 / 增量解析 JSONL 的做法。
 
 TPS 方法论遵循 **codex-model-benchmarks**（作者 *zakmandhro*，

@@ -5,6 +5,15 @@ attribution below is a condition of the licences it is derived under. GitHub's l
 reads `LICENSE` only, which is why this text lives in its own file: keeping the MIT text
 uninterrupted is what makes the repository show up as MIT rather than "Other".
 
+## codex-statusbar — direct source
+
+<https://github.com/dongyue-19/codex-statusbar> · Copyright (c) 2026 CodexStatusbar contributors · MIT
+
+This repository is based on that project's source and contains local modifications. Its original
+copyright notice and MIT license text are preserved in [`LICENSE`](LICENSE). Its inherited
+attributions and the additional upstream license are retained below and in
+[`LICENSE-codex-token-overlay`](LICENSE-codex-token-overlay).
+
 ## codex-token-overlay — the base
 
 <https://github.com/soleillevant0125/codex-token-overlay> · Copyright (c) 2026 soleillevant0125 · MIT
@@ -14,9 +23,9 @@ classifier, the overlay window with `WS_EX_TOOLWINDOW`/`NOACTIVATE`, the window-
 attachment/snapping, theme handling and the settings/tray shell. Its licence text is kept verbatim in
 [`LICENSE-codex-token-overlay`](LICENSE-codex-token-overlay), as that licence requires.
 
-## codex-monitor-hud
+## codex-monitor-hud (now agent-monitor-hud)
 
-<https://github.com/LH-03/codex-monitor-hud> · MIT
+<https://github.com/LH-03/agent-monitor-hud> · MIT
 
 Design ideas taken from it: read-only access to `state_5.sqlite`'s `threads` table, the
 `originator == "Codex Desktop"` root-session filter, and the bounded-tail/incremental JSONL reading

@@ -5,6 +5,11 @@ feature-frozen)
 
 **English** · [简体中文](README.zh-CN.md)
 
+**Project origin:** this repository is based on
+[dongyue-19/codex-statusbar](https://github.com/dongyue-19/codex-statusbar) with local modifications.
+See [Credits and license](#8-credits-and-license) and [third-party notices](THIRD-PARTY-NOTICES.md)
+for the upstream projects, reused work and preserved license notices.
+
 ![CodexStatusbar docked in Codex's composer toolbar, immediately left of the Context usage indicator](docs/images/docked-strip.png)
 
 **Get the binary:** download `CodexStatusbar.exe` from the
@@ -741,14 +746,19 @@ regenerates it from *your* Codex build (see §9).
 
 ## 8. Credits and license
 
+The direct source for this repository is **dongyue-19/codex-statusbar**
+(<https://github.com/dongyue-19/codex-statusbar>, MIT). This repository contains local modifications;
+the upstream copyright notice and MIT license remain in [`LICENSE`](LICENSE). The inherited
+credits below are also preserved in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
 Built as a modification of **codex-token-overlay** by *soleillevant0125*
 (<https://github.com/soleillevant0125/codex-token-overlay>, MIT). Reused from it: the Win32
 Codex-window locator and classifier, the overlay window with `WS_EX_TOOLWINDOW/NOACTIVATE`, the
 window-follow loop, manual attachment/snapping, theme handling and the settings/tray shell.
 Its MIT licence is kept in `LICENSE-codex-token-overlay`.
 
-Design ideas also taken from **codex-monitor-hud** by *LH-03*
-(<https://github.com/LH-03/codex-monitor-hud>, MIT): read-only access to
+Design ideas also taken from **codex-monitor-hud** (now **agent-monitor-hud**) by *LH-03*
+(<https://github.com/LH-03/agent-monitor-hud>, MIT): read-only access to
 `state_5.sqlite`'s `threads` table, the `originator == "Codex Desktop"` root-session filter,
 and the bounded-tail/incremental JSONL reading approach.
 
