@@ -437,7 +437,11 @@ internal sealed class HostWindowSampler : IDisposable
             return false;
         }
 
-        var pendingFrame = _frameBounds;
+        var pendingFrame = _frameBounds with
+        {
+            X = _frameBounds.X + current.X - _windowBounds.X,
+            Y = _frameBounds.Y + current.Y - _windowBounds.Y
+        };
         var pendingWorkingArea = _workingArea;
         if (sizeChanged || monitorChanged || dpiChanged)
         {
@@ -487,6 +491,21 @@ internal sealed class HostWindowSampler : IDisposable
     /// <summary>How many samples have been accepted. Samples held back by the rate limiter are not.</summary>
     public long CommitCount { get; private set; }
 
+    /// <summary>Aligns future deltas with the host snapshot already consumed by a normal layout.</summary>
+    public void AcceptAccurateLayout(CodexWindowInfo host)
+    {
+        if (!_primed || _window != host.Handle) return;
+        // Tracking can be paused during editing/fixed placement. Never replay that old motion on
+        // top of an accurate layout, and never read ahead to geometry the layout has not consumed.
+        _windowBounds = host.WindowBounds;
+        _frameBounds = host.ExtendedFrameBounds;
+        _workingArea = host.WorkingArea;
+        _dpi = host.Dpi;
+        _hasPending = false;
+        // Retain the last sampled monitor: a changed monitor will conservatively trigger a relayout
+        // on the next native sample, rather than treating a newer monitor as already consumed.
+    }
+
     /// <summary>
     /// The layout-ready description of the host, from live geometry plus the two facts only a
     /// recompute needs. Returns false when the window is no longer a plausible Codex editor, matching
@@ -495,22 +514,28 @@ internal sealed class HostWindowSampler : IDisposable
     public bool TryBuildHostInfo(out CodexWindowInfo info)
     {
         info = null!;
+        // Relayout consumes a sample before Commit accepts it as the next delta's baseline.
+        // Use all fields from that same sample, without prematurely consuming held-back motion.
+        var windowBounds = _hasPending ? _pendingBounds : _windowBounds;
+        var frameBounds = _hasPending ? _pendingFrame : _frameBounds;
+        var workingArea = _hasPending ? _pendingWorkingArea : _workingArea;
+        var dpi = _hasPending ? _pendingDpi : _dpi;
         if (_window == IntPtr.Zero
             || !_primed
-            || _frameBounds.Width < MinimumHostWidth
-            || _frameBounds.Height < MinimumHostHeight)
+            || frameBounds.Width < MinimumHostWidth
+            || frameBounds.Height < MinimumHostHeight)
         {
             return false;
         }
 
         info = new CodexWindowInfo(
             _window,
-            _windowBounds,
-            _frameBounds,
-            CodexWindowLocator.TryReadCaptionButtonBounds(_window, _windowBounds),
-            _workingArea,
-            _dpi,
-            CodexWindowLocator.ReadChromeMetrics(_dpi));
+            windowBounds,
+            frameBounds,
+            CodexWindowLocator.TryReadCaptionButtonBounds(_window, windowBounds),
+            workingArea,
+            dpi,
+            CodexWindowLocator.ReadChromeMetrics(dpi));
         return true;
     }
 

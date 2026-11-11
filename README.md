@@ -30,9 +30,9 @@ the open conversation and shows **turns, steps, output speed, total tokens, cach
 4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
 
-The screenshot shows the current UI. At normal widths, once history counts are recovered, the strip
-uses these Chinese labels, including on an English setup. `~` marks a held sample; `≈` marks partial
-response timing coverage. Narrow windows and unavailable counts use shorter variants (§4).
+The screenshot shows the default Chinese display. Use **tray → 语言 / Language → English** for
+English labels throughout the strip, details panel and tray menu. `~` marks a held sample; `≈` marks
+partial response timing coverage. Narrow windows and unavailable counts use shorter variants (§4).
 
 By default it docks **inside Codex's own composer toolbar** — immediately left of the Context usage
 indicator, on the same line as the model selector, microphone and send button. It draws text only
@@ -497,13 +497,29 @@ While docked the strip needs no adjustment at all. To move it by hand:
 * **Tray icon**: position, theme, transparency, text shadow, which fields are visible, detail panel,
   hide, quit.
 
+### Display language
+
+Choose **tray → 语言 / Language → 简体中文 / English**. The selection takes effect immediately and
+is saved for the next launch. Chinese remains the default on new installs and upgrades, independently
+of the Windows language. Both versions show the same metrics:
+
+```text
+简体中文: 4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
+English:  4 turns 46 steps · ~32 tok/s · 4.5M tok · Cache hit 97% · Context 34%
+```
+
+English uses `4T46S` for turn/step counts in the compact variant. Both languages reuse the responsive
+ladder and hide the strip if even the smallest variant cannot fit. Finish or cancel a position
+adjustment before switching languages.
+
 ### Settings file
 
 `%LOCALAPPDATA%\CodexStatusbar\settings.json` — written on first run and after every change:
 
 ```json
 {
-  "settingsVersion": 4,
+  "settingsVersion": 5,
+  "language": "zh-CN",
   "transparentBackground": true,
   "positionMode": "ComposerContextLeft",
   "contextGapDip": 10,
@@ -517,6 +533,7 @@ While docked the strip needs no adjustment at all. To move it by hand:
 }
 ```
 
+Set `language` to `"zh-CN"` or `"en"`; a missing or unknown value falls back to Chinese.
 It is plain text and safe to edit by hand; restart the monitor to pick up changes. `anchor` /
 `offsetX` / `offsetY` are only consulted in `Manual position`, and are preserved when docking so
 switching back restores exactly the old position. A version-1 file still loads. A version-2 file

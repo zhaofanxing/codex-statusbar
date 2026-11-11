@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -64,6 +65,12 @@ internal static class SelfTest
         Section("session progress: bounded history recovery and append-only counting");
         RunSessionProgress();
 
+        Section("rollout usage: split writes and byte cursor");
+        RunIncrementalUsageReads();
+
+        Section("state database: isolated profiles and rollout boundaries");
+        RunDatabaseIsolation();
+
         Section("TPS: paired response tokens and generation time");
         RunResponsePairing();
         RunResponseBoundaries();
@@ -77,6 +84,9 @@ internal static class SelfTest
         Section("overlay presentation: transparency, shadow, position model");
         RunOverlayPresentation(stdout);
 
+        Section("display language: bilingual metrics and settings compatibility");
+        RunDisplayLanguage();
+
         Section("position model: anchor + DIP offset, resize stability, persistence");
         RunPositionModel(stdout);
 
@@ -85,6 +95,7 @@ internal static class SelfTest
 
         Section("lifecycle: Codex identity, start with Windows, attach ladder");
         RunLifecycle(stdout);
+        RunWindowSelection();
 
         Section("position fast path: pure move, coalescing, burst tail, DPI/monitor");
         RunPositionFastPath(stdout);
@@ -113,6 +124,14 @@ internal static class SelfTest
             OverlaySettings.CreateDefault().TextShadow, false);
         Check("new install tracks the system theme",
             OverlaySettings.CreateDefault().ThemePreference == OverlayThemePreference.Auto, true);
+        Check("theme acceptance rejects a false assertion",
+            ProbeRunner.ThemeProbePassed(JsonSerializer.SerializeToElement(new { Cases = new[] { new { Supported = true, Rendered = false } } })), false);
+        Check("theme acceptance accepts successful assertions",
+            ProbeRunner.ThemeProbePassed(JsonSerializer.SerializeToElement(new { Cases = new[] { new { Supported = true, Rendered = true } } })), true);
+        Check("theme acceptance rejects empty results",
+            ProbeRunner.ThemeProbePassed(JsonSerializer.SerializeToElement(new { Cases = Array.Empty<object>() })), false);
+        Check("theme acceptance rejects a case without assertions",
+            ProbeRunner.ThemeProbePassed(JsonSerializer.SerializeToElement(new { Cases = new[] { new { Name = "empty" } } })), false);
 
         // Light text must get a dark shadow and vice versa, or the shadow would wash the glyphs out.
         var dark = OverlayThemePalette.For(OverlayThemeKind.Dark);
@@ -196,6 +215,114 @@ internal static class SelfTest
         {
             File.Delete(themePath);
         }
+    }
+
+    private static void RunDisplayLanguage()
+    {
+        Check("display defaults to Chinese", OverlaySettings.CreateDefault().Language, OverlayLanguage.Chinese);
+        var upgraded = OverlaySettings.ParseJson("""
+            {"settingsVersion":4,"theme":"Light","positionMode":"FixedScreen","fixedScreenX":140,
+             "fixedScreenY":260,"startWithWindows":false,"startupConfigured":true}
+            """);
+        Check("v4 settings migrate to the language schema", upgraded.MustPersist, true);
+        Check("an upgrade keeps the Chinese display", upgraded.Settings.Language, OverlayLanguage.Chinese);
+        Check("an upgrade preserves the selected theme", upgraded.Settings.ThemePreference, OverlayThemePreference.Light);
+        Check("an upgrade preserves the selected position mode", upgraded.Settings.PositionMode, OverlayPositionMode.FixedScreen);
+        Check("an upgrade preserves the fixed position", upgraded.Settings.FixedScreenPosition == new Point(140, 260), true);
+        Check("an upgrade preserves startup opt-out", !upgraded.Settings.StartWithWindows && upgraded.Settings.StartupConfigured, true);
+        Check("an unknown language falls back to Chinese",
+            OverlaySettings.ParseJson("""{"language":"fr"}""").Settings.Language, OverlayLanguage.Chinese);
+        Check("an absent language falls back to Chinese",
+            OverlaySettings.ParseJson("{}").Settings.Language, OverlayLanguage.Chinese);
+        Check("language codes are case-insensitive",
+            OverlaySettings.ParseJson("""{"language":"EN"}""").Settings.Language, OverlayLanguage.English);
+
+        var settingsPath = Path.Combine(Path.GetTempPath(), "codex-statusbar-language-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            foreach (var language in Enum.GetValues<OverlayLanguage>())
+            {
+                upgraded.Settings.Language = language;
+                Check($"{language}: language setting saves", upgraded.Settings.TrySave(settingsPath), true);
+                var reloaded = OverlaySettings.LoadFromFile(settingsPath);
+                Check($"{language}: language survives restart", reloaded.Settings.Language, language);
+                Check($"{language}: current schema needs no further migration", reloaded.MustPersist, false);
+                Check($"{language}: unrelated settings survive language change",
+                    reloaded.Settings.ThemePreference == OverlayThemePreference.Light
+                    && reloaded.Settings.PositionMode == OverlayPositionMode.FixedScreen
+                    && reloaded.Settings.FixedScreenPosition == new Point(140, 260)
+                    && !reloaded.Settings.StartWithWindows && reloaded.Settings.StartupConfigured, true);
+                Check($"{language}: settings use a stable language code",
+                    File.ReadAllText(settingsPath).Contains($"\"language\": \"{OverlayText.LanguageName(language)}\"", StringComparison.Ordinal), true);
+            }
+        }
+        finally
+        {
+            File.Delete(settingsPath);
+        }
+
+        var snapshot = TokenSnapshot.Draft with
+        {
+            TotalTokens = 1_200_000,
+            InputTokens = 1_160_000,
+            CachedInputTokens = 1_125_200,
+            OutputTokens = 40_000,
+            ContextUsedTokens = 14_000,
+            ContextWindowTokens = 200_000,
+            Tps = 32,
+            Progress = new SessionProgress(4, 46)
+        };
+        var chinese = OverlayPresentationBuilder.Create(snapshot, DisplayField.Tps, DisplayField.Total,
+            DisplayFieldRules.SupportedMask, OverlayLanguage.Chinese);
+        var english = OverlayPresentationBuilder.Create(snapshot, DisplayField.Tps, DisplayField.Total,
+            DisplayFieldRules.SupportedMask, OverlayLanguage.English);
+        Check("Chinese full text is preserved", chinese.CapsuleText,
+            "4 轮 46 步 · 32 tok/s · 1.2M tok · 缓存命中 97% · 上下文 7%");
+        Check("English full text translates all labels", english.CapsuleText,
+            "4 turns 46 steps · 32 tok/s · 1.2M tok · Cache hit 97% · Context 7%");
+        Check("English compact progress is concise", english.Variants[1], "4T46S · 32 t/s · 1.2M · 97% · Context 7%");
+        Check("both languages retain the same minimum fallback", english.NarrowestVariant, chinese.NarrowestVariant);
+        Check("language reaches the form presentation", english.Language, OverlayLanguage.English);
+        Check("English singular counts are grammatical",
+            OverlayPresentationBuilder.BuildCapsuleText(snapshot with { Progress = new SessionProgress(1, 1) }, OverlayLanguage.English)
+                .StartsWith("1 turn 1 step · ", StringComparison.Ordinal), true);
+        Check("English drafts show zero counts and unknown metrics",
+            OverlayPresentationBuilder.BuildCapsuleText(TokenSnapshot.Draft, OverlayLanguage.English),
+            "0 turns 0 steps · -- tok/s · 0 tok · Cache hit -- · Context --");
+        var waiting = OverlayPresentationBuilder.CreateWaiting("Waiting", DisplayField.Tps, DisplayField.Total,
+            DisplayFieldRules.SupportedMask, OverlayLanguage.English);
+        Check("English waiting state retains unknown usage", waiting.CapsuleText,
+            "⚡ -- tok/s · -- tok · Cache -- · Context --");
+        Check("unknown context stays unknown in English",
+            OverlayPresentationBuilder.BuildCapsuleText(snapshot with { ContextWindowTokens = 0 }, OverlayLanguage.English)
+                .EndsWith("Context --", StringComparison.Ordinal), true);
+
+        foreach (var field in DisplayFieldRules.Ordered)
+        {
+            var secondary = field == DisplayField.Total ? DisplayField.Tps : DisplayField.Total;
+            var zh = OverlayPresentationBuilder.Create(snapshot, field, secondary, DisplayFieldRules.SupportedMask, OverlayLanguage.Chinese);
+            var en = OverlayPresentationBuilder.Create(snapshot, field, secondary, DisplayFieldRules.SupportedMask, OverlayLanguage.English);
+            Check($"{field}: language does not alter the metric", en.Primary.Value, zh.Primary.Value);
+            Check($"{field}: English labels and menu text contain no Chinese",
+                !ContainsChinese(en.Primary.CompactLabel + en.Primary.ExpandedLabel
+                    + OverlayPresentationBuilder.GetFieldMenuText(field, OverlayLanguage.English)), true);
+        }
+        foreach (var language in Enum.GetValues<OverlayLanguage>())
+        {
+            var variants = OverlayPresentationBuilder.BuildCapsuleVariants(snapshot, language);
+            for (var index = 1; index < variants.Count; index++)
+            {
+                // The no-count full form starts a separate fallback group and can be wider than
+                // compact counts. Only the steps within each group must become shorter.
+                if (index == 2)
+                {
+                    continue;
+                }
+                Check($"{language}: responsive level {index} is shorter", variants[index].Length < variants[index - 1].Length, true);
+            }
+        }
+
+        static bool ContainsChinese(string value) => value.Any(character => character is >= '\u4e00' and <= '\u9fff');
     }
 
     /// <summary>Folds the whole position suite into the default gate instead of duplicating it.</summary>
@@ -800,6 +927,196 @@ internal static class SelfTest
         }
     }
 
+    private static void RunIncrementalUsageReads()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-statusbar-reads-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "rollout.jsonl");
+        var usage = Encoding.UTF8.GetBytes("{\"note\":\"中文\",\"type\":\"token_usage_record\",\"payload\":{\"thread_token_usage\":{\"input_tokens\":100,\"output_tokens\":10,\"total_tokens\":110}}}");
+        try
+        {
+            foreach (var initializeWithFragment in new[] { false, true })
+            foreach (var split in new[] { 11, 70, usage.Length - 1 })
+            {
+                File.WriteAllText(path, ProgressSession("split") + "\n");
+                var reader = new RolloutReader(path);
+                if (!initializeWithFragment) reader.Initialize();
+                using (var writer = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                    writer.Write(usage.AsSpan(0, split));
+                if (initializeWithFragment) reader.Initialize(); else reader.TryUpdate();
+                var parsed = reader.ParsedBytes;
+                Check("split usage stays pending", reader.State.HasCumulativeUsage, false);
+                for (var poll = 0; poll < 3; poll++) reader.TryUpdate();
+                Check("empty polls do not reread the pending bytes", reader.ParsedBytes, parsed);
+                using (var writer = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                    writer.Write(usage.AsSpan(split));
+                reader.TryUpdate();
+                Check("split UTF-8 usage without newline recovers once", reader.State.TotalTokens, 110L);
+                Check("split usage is marked reliable", reader.RecoveredFromRollout, true);
+                var lines = reader.State.LineCount;
+                File.AppendAllText(path, "\n");
+                reader.TryUpdate();
+                Check("a later newline does not count the record twice", reader.State.LineCount, lines);
+                Check("pending fragments never produce malformed warnings", reader.State.Warnings.Count, 0);
+            }
+
+            File.WriteAllLines(path, [ProgressSession("split"), TaskStarted("split-turn"),
+                ItemCompleted("split-turn", "Reasoning", 1_000L, 2_000L)]);
+            var timedReader = new RolloutReader(path);
+            timedReader.Initialize();
+            var timedUsage = WithTimestamp(UsageRecordWithKey(100, 80, 10, "split-turn", "split-response"), 2_000L);
+            File.AppendAllText(path, timedUsage[..70]);
+            timedReader.TryUpdate();
+            timedReader.TryUpdate();
+            File.AppendAllText(path, timedUsage[70..] + "\n" + TaskComplete("split-turn") + "\n");
+            timedReader.TryUpdate();
+            Check("split response retains its official TPS sample", timedReader.State.Tps.DisplayTps, 10.0, 1e-9);
+            Check("split response is paired exactly once", timedReader.State.Tps.TimedResponseCount, 1);
+
+            File.WriteAllText(path, ProgressSession("rewrite") + "\n" + Encoding.UTF8.GetString(usage)
+                + "\n{\"padding\":\"" + new string('x', 200) + "\"}\n");
+            var rewriteReader = new RolloutReader(path);
+            rewriteReader.Initialize();
+            var lastWrite = File.GetLastWriteTimeUtc(path);
+            var content = File.ReadAllText(path);
+            File.WriteAllText(path, content.Replace("100", "900").Replace("110", "910"));
+            File.SetLastWriteTimeUtc(path, lastWrite.AddSeconds(1));
+            Check("same-length same-session rewrite invalidates usage even with an unchanged suffix",
+                rewriteReader.TryUpdate() == RolloutUpdateResult.NeedsReinitialize, true);
+            rewriteReader.Initialize();
+            Check("rewrite rebuilds the official total", rewriteReader.State.TotalTokens, 910L);
+            var rewriteBytes = rewriteReader.ParsedBytes;
+            Check("unchanged files remain on the bounded polling path",
+                rewriteReader.TryUpdate() == RolloutUpdateResult.Unchanged && rewriteReader.ParsedBytes == rewriteBytes, true);
+            File.AppendAllText(path, Encoding.UTF8.GetString(usage) + "\n");
+            Check("ordinary append stays incremental", rewriteReader.TryUpdate() == RolloutUpdateResult.Updated, true);
+            Check("ordinary append replaces the cumulative sample", rewriteReader.State.TotalTokens, 110L);
+
+            File.WriteAllText(path, ProgressSession("rewrite-large") + "\n" + Encoding.UTF8.GetString(usage)
+                + "\n{\"padding\":\"" + new string('x', TpsRules.TailReadBytes + 128) + "\"}\n");
+            rewriteReader.Initialize();
+            Check("rewrite regression exercises backward tail extension", rewriteReader.TailWasExtended, true);
+            lastWrite = File.GetLastWriteTimeUtc(path);
+            content = File.ReadAllText(path);
+            File.WriteAllText(path, content.Replace("100", "900").Replace("110", "910"));
+            File.SetLastWriteTimeUtc(path, lastWrite.AddSeconds(1));
+            Check("first poll after backward extension still detects an equal-length rewrite",
+                rewriteReader.TryUpdate() == RolloutUpdateResult.NeedsReinitialize, true);
+            rewriteReader.Initialize();
+            Check("extended rewrite rebuilds the official total", rewriteReader.State.TotalTokens, 910L);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(directory);
+        }
+    }
+
+    private static void RunDatabaseIsolation()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-statusbar-db-" + Guid.NewGuid().ToString("N"));
+        var profile = Path.Combine(directory, "profile");
+        var sessions = Path.Combine(profile, "sessions");
+        var isolated = Path.Combine(directory, "isolated", "sessions");
+        var sibling = Path.Combine(profile, "sessions-extra");
+        Directory.CreateDirectory(sessions);
+        Directory.CreateDirectory(isolated);
+        Directory.CreateDirectory(sibling);
+        var previousHome = Environment.GetEnvironmentVariable("CODEX_HOME");
+        const string id = "11111111-1111-1111-1111-111111111111";
+        var database = Path.Combine(profile, "state_5.sqlite");
+        try
+        {
+            // Only the process environment and this test's own database are changed.
+            Environment.SetEnvironmentVariable("CODEX_HOME", profile);
+            WriteTestDatabase(database, id, null);
+            Check("an absent sibling database never resolves to another profile",
+                StateDatabase.ResolvePathForSessionsRoot(isolated), Path.Combine(directory, "isolated", "state_5.sqlite"));
+            using (var monitor = new TokenLogMonitor(isolated))
+                Check("isolated sessions cannot select a synthetic default-profile thread",
+                    string.IsNullOrEmpty(monitor.Poll()?.ThreadId), true);
+            using (var monitor = new TokenLogMonitor())
+                Check("the default profile still recovers its own official total", monitor.Poll()?.TotalTokens == 12345L, true);
+            using (var monitor = new TokenLogMonitor(sessions))
+            {
+                var snapshot = monitor.Poll()!;
+                Check("database-only compact total remains visible",
+                    OverlayPresentationBuilder.BuildCapsuleText(snapshot).Contains("12.3K tok", StringComparison.Ordinal), true);
+                var reliableParts = snapshot with { InputTokens = 100, OutputTokens = 10, CachedInputTokens = 80 };
+                Check("reliable compact total uses input plus output without double counting cached input",
+                    OverlayPresentationBuilder.BuildCapsuleText(reliableParts).Contains("110 tok", StringComparison.Ordinal), true);
+            }
+
+            var outside = Path.Combine(sibling, $"rollout-{id}.jsonl");
+            File.WriteAllLines(outside, [ProgressSession(id), UsageRecord(900, 800, 10)]);
+            foreach (var candidate in new[] { outside, Path.Combine(sessions, "..", "sessions-extra", Path.GetFileName(outside)) })
+            {
+                WriteTestDatabase(database, id, candidate);
+                using var monitor = new TokenLogMonitor(sessions);
+                Check("database rollout paths cannot cross the sessions directory boundary",
+                    string.IsNullOrEmpty(monitor.Poll()?.LogPath), true);
+            }
+            var inside = Path.Combine(sessions, $"rollout-{id}.jsonl");
+            File.WriteAllLines(inside, [ProgressSession(id), UsageRecord(100, 80, 10)]);
+            WriteTestDatabase(database, id, inside);
+            using (var monitor = new TokenLogMonitor(sessions))
+                Check("an in-root database rollout is still usable", monitor.Poll()?.TotalTokens == 110L, true);
+            File.WriteAllText(inside, ProgressSession(id) + "\n");
+            using (var monitor = new TokenLogMonitor(sessions))
+            {
+                var baseline = monitor.Poll()!;
+                Check("a header-only rollout retains its database total", baseline.TotalTokens, 12345L);
+                Check("a database total never fabricates input or cache breakdown",
+                    baseline.InputTokens == 0 && baseline.OutputTokens == 0 && baseline.CacheHitPercent is null, true);
+                Check("header-only compact text retains total and unknown cache",
+                    OverlayPresentationBuilder.BuildCapsuleText(baseline).Contains("12.3K tok · 缓存命中 --", StringComparison.Ordinal), true);
+                var details = OverlayPresentationBuilder.Create(baseline, DisplayField.Input, DisplayField.Output,
+                    DisplayField.Input | DisplayField.Output | DisplayField.CacheHit | DisplayField.CacheMiss);
+                Check("unknown database-only input and output render as placeholders",
+                    !details.Primary.HasValue && !details.Secondary.HasValue, true);
+                Check("unknown cached and uncached tokens render as placeholders",
+                    details.ExpandedRows.All(row => !row.HasValue), true);
+                File.AppendAllText(inside, UsageRecord(100, 80, 10) + "\n");
+                var observed = monitor.Poll()!;
+                Check("real rollout usage replaces a database-only baseline",
+                    observed.TotalTokens == 110 && observed.InputTokens == 100 && observed.CacheHitPercent == 80
+                    && observed.BaselineSource == "rollout-tail", true);
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CODEX_HOME", previousHome);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void WriteTestDatabase(string path, string id, string? rollout)
+    {
+        // Write access belongs only to self-test fixtures; production StateDatabase stays read-only.
+        static string Literal(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+        if (TestSqliteOpen(path, out var database) != 0) throw new IOException("Cannot create test database.");
+        try
+        {
+            var sql = "CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY,title TEXT,rollout_path TEXT,"
+                + "tokens_used INTEGER,recency_at_ms INTEGER,archived INTEGER,name TEXT,originator TEXT);"
+                + "INSERT OR REPLACE INTO threads VALUES (" + Literal(id) + ",'Synthetic',"
+                + (rollout is null ? "NULL" : Literal(rollout)) + ",12345,100,0,'synthetic','Codex Desktop');";
+            if (TestSqliteExec(database, sql, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero) != 0)
+                throw new IOException("Cannot seed test database.");
+        }
+        finally { _ = TestSqliteClose(database); }
+    }
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_open", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int TestSqliteOpen([MarshalAs(UnmanagedType.LPUTF8Str)] string path, out IntPtr database);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_exec", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int TestSqliteExec(IntPtr database, [MarshalAs(UnmanagedType.LPUTF8Str)] string sql,
+        IntPtr callback, IntPtr argument, IntPtr error);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_close", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int TestSqliteClose(IntPtr database);
+
     private static string ProgressSession(string threadId) =>
         $$$$"""{"type":"session_meta","payload":{"id":"{{{{threadId}}}}","originator":"Codex Desktop"}}""";
 
@@ -1063,6 +1380,35 @@ internal static class SelfTest
     /// attach ladder advances. Nothing here starts a watcher, writes the registry or needs Codex to
     /// be running — the live behaviour is verified separately by the lifecycle acceptance run.
     /// </summary>
+    private static void RunWindowSelection()
+    {
+        var large = new WindowCandidateFacts(new IntPtr(100), 42, true, true, false, IntPtr.Zero, 0,
+            new IntRect(10, 10, 1200, 900), "Chrome_WidgetWin_1");
+        var small = large with { Handle = new IntPtr(200), Bounds = new IntRect(1300, 10, 800, 600) };
+        var popup = large with { Handle = new IntPtr(300), OwnerHandle = large.Handle,
+            Bounds = new IntRect(20, 20, 600, 450) };
+        WindowCandidateFacts[] windows = [large, small, popup];
+        Check("a qualified foreground main window wins over a larger sibling",
+            CodexWindowClassifier.Select(windows, small.Handle)?.Host.Handle == small.Handle, true);
+        Check("a larger foreground main window is still selected",
+            CodexWindowClassifier.Select(windows, large.Handle)?.Host.Handle == large.Handle, true);
+        Check("a foreground popup still resolves to the qualified host",
+            CodexWindowClassifier.Select(windows, popup.Handle)?.Host.Handle == large.Handle, true);
+        var tool = small with { ExtendedStyle = CodexWindowClassifier.WsExToolWindow };
+        Check("foreground tool windows do not become main hosts",
+            CodexWindowClassifier.Select([large, tool], tool.Handle)?.Host.Handle == large.Handle, true);
+        var layered = small with { ExtendedStyle = CodexWindowClassifier.WsExLayered };
+        Check("foreground layered windows do not become main hosts",
+            CodexWindowClassifier.Select([large, layered], layered.Handle)?.Host.Handle == large.Handle, true);
+        var foreign = small with { IsCodexProcess = false };
+        Check("an unrelated foreground app never attaches to a background Codex host",
+            CodexWindowClassifier.Select([large, foreign], foreign.Handle) is null, true);
+        var otherProcess = large with { Handle = new IntPtr(400), ProcessId = 99,
+            Bounds = new IntRect(0, 0, 2000, 1500) };
+        Check("popup fallback remains in the foreground process",
+            CodexWindowClassifier.Select([large, popup, otherProcess], popup.Handle)?.Host.Handle == large.Handle, true);
+    }
+
     private static void RunLifecycle(TextWriter stdout)
     {
         const string officialFamily = "OpenAI.Codex_2p2nqsd0c76g0";
@@ -1281,7 +1627,9 @@ internal static class SelfTest
             "{\"settingsVersion\":4,\"startWithWindows\":false,\"startupConfigured\":true}");
         Check("a v4 file that turned it off stays off", turnedOff.Settings.StartWithWindows, false);
         Check("and is already configured, so nothing re-enables it", turnedOff.Settings.StartupConfigured, true);
-        Check("a current file is not rewritten", turnedOff.MustPersist, false);
+        Check("a v4 file is migrated to include its display language", turnedOff.MustPersist, true);
+        Check("a current file is not rewritten",
+            OverlaySettings.ParseJson(turnedOff.Settings.Serialize()).MustPersist, false);
 
         var turnedOn = OverlaySettings.ParseJson(
             "{\"settingsVersion\":4,\"startWithWindows\":true,\"startupConfigured\":true}");

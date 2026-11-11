@@ -28,8 +28,9 @@ ZIP 解压后运行 `start-monitor.bat`，独立 `.exe` 也可直接启动。
 4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
 
-上图是当前界面的实际截图。正常宽度且历史计数恢复完成时，状态条使用这套中文措辞；`~` 表示暂时
-保留上一采样值，`≈` 表示只有部分响应具备可靠计时。空间不足或计数尚未就绪时，会使用较短的形式（§4）。
+上图是默认中文界面的实际截图。可在**托盘 → 语言 / Language → English** 切换状态条、详情面板和
+托盘菜单的显示语言。`~` 表示暂时保留上一采样值，`≈` 表示只有部分响应具备可靠计时。
+空间不足或计数尚未就绪时，会使用较短的形式（§4）。
 
 默认情况下它停靠**在 Codex 自己的输入框底栏内部** —— 紧贴 Context 用量指示器的左侧，与模型
 选择器、麦克风和发送按钮在同一行。它只在完全透明的背景上绘制文字，因此读起来像是 Codex 界面的
@@ -455,13 +456,27 @@ Anchor = TopRight      OffsetX = -24 DIP      OffsetY = +16 DIP
   的应答是 `MA_NOACTIVATE`。
 * **托盘图标**：位置、主题、透明度、文字阴影、显示哪些字段、详情面板、隐藏、退出。
 
+### 显示语言
+
+在**托盘 → 语言 / Language → 简体中文 / English** 选择显示语言，立即生效并记住选择。
+首次运行和旧版升级默认使用中文，不受 Windows 系统语言影响。两个版本显示相同的指标：
+
+```text
+简体中文：4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
+English:  4 turns 46 steps · ~32 tok/s · 4.5M tok · Cache hit 97% · Context 34%
+```
+
+英文紧凑形式使用 `4T46S` 表示轮数与步数。两种语言均沿用窄窗口自动缩短的规则；最短形式仍放不下时隐藏。
+调整位置期间请先保存或取消调整，再切换语言。
+
 ### 设置文件
 
 `%LOCALAPPDATA%\CodexStatusbar\settings.json` —— 首次运行时以及每次改动后写入：
 
 ```json
 {
-  "settingsVersion": 4,
+  "settingsVersion": 5,
+  "language": "zh-CN",
   "transparentBackground": true,
   "positionMode": "ComposerContextLeft",
   "contextGapDip": 10,
@@ -475,6 +490,7 @@ Anchor = TopRight      OffsetX = -24 DIP      OffsetY = +16 DIP
 }
 ```
 
+`language` 支持 `"zh-CN"` 和 `"en"`，缺失或未知值回退中文。
 它是纯文本，可以安全地手工编辑；重启监控器以应用改动。`anchor` / `offsetX` / `offsetY` 只在
 `Manual position` 下被使用，并且在停靠时也会被保留，因此切回去时会精确恢复原来的位置。版本 1 的
 文件仍然能加载。版本 2 的文件如果其模式是旧的默认值（`FollowCodex`），会被升级为停靠一次；显式

@@ -70,7 +70,9 @@ internal static class ProbeRunner
         if (args.Count >= 2 && args[0].Equals("--theme-probe", StringComparison.OrdinalIgnoreCase))
         {
             PrepareWindowProbeDpiAwareness();
-            WriteJson(args[1], ExecuteThemeProbe());
+            var result = ExecuteThemeProbe();
+            WriteJson(args[1], result);
+            LastExitCode = ThemeProbePassed(JsonSerializer.SerializeToElement(result)) ? 0 : 1;
             return true;
         }
 
@@ -890,6 +892,15 @@ internal static class ProbeRunner
         return form.Region.Equals(expected, graphics);
     }
 
+    internal static bool ThemeProbePassed(JsonElement result)
+    {
+        if (!result.TryGetProperty("Cases", out var cases) || cases.ValueKind != JsonValueKind.Array
+            || cases.GetArrayLength() == 0) return false;
+        return cases.EnumerateArray().All(item => item.ValueKind == JsonValueKind.Object
+            && item.EnumerateObject().Any(property => property.Value.ValueKind == JsonValueKind.True)
+            && !item.EnumerateObject().Any(property => property.Value.ValueKind == JsonValueKind.False));
+    }
+
     private static object ExecuteThemeProbe()
     {
         var backgroundErrors = new List<string>();
@@ -1033,8 +1044,7 @@ internal static class ProbeRunner
         var formsInitialDark = formApplyCount == 1
             && themedForm.CurrentThemePalette == darkPalette
             && themedHighlight.CurrentThemePalette == darkPalette
-            && themedForm.BackColor == darkPalette.Background
-            && themedForm.ForeColor == darkPalette.Value
+            && ThemeSurfaceMatches(themedForm, darkPalette)
             && themedHighlight.BackColor == Color.Fuchsia
             && themedHighlight.TransparencyKey == Color.Fuchsia;
 
@@ -1047,8 +1057,7 @@ internal static class ProbeRunner
             && formLightApplied
             && themedForm.CurrentThemePalette == lightPalette
             && themedHighlight.CurrentThemePalette == lightPalette
-            && themedForm.BackColor == lightPalette.Background
-            && themedForm.ForeColor == lightPalette.Value
+            && ThemeSurfaceMatches(themedForm, lightPalette)
             && formApplyThreads.All(threadId => threadId == uiThreadId);
         var formsStateUnchanged = themedForm.Bounds == themedBounds
             && ReferenceEquals(themedForm.CurrentLayout, themedLayout)
@@ -1065,7 +1074,10 @@ internal static class ProbeRunner
         Application.DoEvents();
         var formsSameKindIgnored = formSameTaskCompleted && formApplyCount == 2;
 
+        var recreatedHandles = 0;
+        themedForm.HandleCreated += (_, _) => recreatedHandles++;
         themedForm.EndEditMode();
+        themedForm.SetTransparentBackground(false);
         var formDarkTask = RunCaptured(
             () => formSource.Set(OverlayThemeKind.Dark, forceEvent: true),
             backgroundErrors);
@@ -1073,8 +1085,10 @@ internal static class ProbeRunner
         var formDarkApplied = PumpUntil(() => formApplyCount == 3);
         var formsSurviveTokenHandleRecreation = formDarkTaskCompleted
             && formDarkApplied
+            && recreatedHandles == 1 && themedForm.IsHandleCreated
             && themedForm.CurrentThemePalette == darkPalette
             && themedHighlight.CurrentThemePalette == darkPalette
+            && ThemeSurfaceMatches(themedForm, darkPalette, requireBackground: true)
             && formApplyThreads.All(threadId => threadId == uiThreadId);
 
         formBinding.Dispose();
@@ -1087,7 +1101,8 @@ internal static class ProbeRunner
         var formsPostDisposeIgnored = postDisposeFormCompleted
             && formApplyCount == 3
             && themedForm.CurrentThemePalette == darkPalette
-            && themedHighlight.CurrentThemePalette == darkPalette;
+            && themedHighlight.CurrentThemePalette == darkPalette
+            && ThemeSurfaceMatches(themedForm, darkPalette, requireBackground: true);
 
         return new
         {
@@ -1119,6 +1134,29 @@ internal static class ProbeRunner
                 }
             }
         };
+    }
+
+    private static bool ThemeSurfaceMatches(TokenStripForm form, OverlayThemePalette palette, bool requireBackground = false)
+    {
+        if (form.CurrentLayout is not { } layout) return false;
+        // Inspect the same layered bitmap the live window blits, rather than WinForms BackColor.
+        using var surface = form.RenderSurfaceBitmap(form.Size, layout.Dpi);
+        var ink = form.RenderDecorations.ShowDragHint ? palette.Hint
+            : string.IsNullOrWhiteSpace(form.CurrentPresentation.StatusText) ? palette.Value : palette.Label;
+        var inkPixels = 0;
+        var backgroundPixels = 0;
+        var transparentPixels = 0;
+        for (var y = 0; y < surface.Height; y++)
+        for (var x = 0; x < surface.Width; x++)
+        {
+            var pixel = surface.GetPixel(x, y);
+            if (pixel.A == 0) transparentPixels++;
+            // Edit hints intentionally have alpha 235, composited over the faint edit wash.
+            if (pixel.A >= Math.Min(240, ink.A - 4) && Math.Abs(pixel.R - ink.R) <= 3
+                && Math.Abs(pixel.G - ink.G) <= 3 && Math.Abs(pixel.B - ink.B) <= 3) inkPixels++;
+            if (pixel.ToArgb() == palette.Background.ToArgb()) backgroundPixels++;
+        }
+        return inkPixels > 4 && transparentPixels > 0 && (!requireBackground || backgroundPixels > 0);
     }
 
     private static Task RunCaptured(Action action, List<string> errors) => Task.Run(() =>

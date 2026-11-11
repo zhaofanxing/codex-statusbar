@@ -301,6 +301,9 @@ internal sealed record TokenSnapshot(
     public long UncachedInputTokens => Math.Max(0, InputTokens - CachedInputTokens);
 
     public bool HasUsage => TotalTokens > 0 || InputTokens > 0 || OutputTokens > 0;
+
+    /// <summary>A positive total alone (the state database fallback) cannot establish its parts.</summary>
+    public bool HasTokenBreakdown => InputTokens > 0 || OutputTokens > 0;
 }
 
 internal sealed record ActiveThreadRouteStatus(
@@ -951,11 +954,11 @@ internal sealed class TokenLogMonitor : IDisposable
             if (_reader.TryUpdate() is RolloutUpdateResult.NeedsReinitialize)
             {
                 _reader.Initialize();
-                if (_reader.RecoveredFromRollout)
-                {
-                    _baselineSource = "rollout-tail";
-                }
+                if (_stateRecord is not null) _reader.State.ApplyStateDatabaseBaseline(_stateRecord.TokensUsed);
             }
+            // Real appended usage supersedes a database baseline just as tail recovery does.
+            _baselineSource = _reader.RecoveredFromRollout ? "rollout-tail"
+                : _reader.State.HasCumulativeUsage ? "state-db" : "none";
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -1117,10 +1120,26 @@ internal sealed class TokenLogMonitor : IDisposable
             return;
         }
 
-        var path = !string.IsNullOrWhiteSpace(record.RolloutPath) && File.Exists(record.RolloutPath)
+        var path = IsRolloutWithinSessionRoot(record.RolloutPath) && File.Exists(record.RolloutPath)
             ? record.RolloutPath
             : FindRolloutPath(record.Id);
         SwitchActiveLog(path, record.Id, "sqlite-fallback", record);
+    }
+
+    private bool IsRolloutWithinSessionRoot(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path)) return false;
+        try
+        {
+            var root = Path.GetFullPath(_sessionRoot);
+            if (!Path.EndsInDirectorySeparator(root)) root += Path.DirectorySeparatorChar;
+            // Include the separator so a sibling named sessions-extra cannot pass the boundary.
+            return Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private bool IsRootDesktopSession(string path)

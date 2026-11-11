@@ -33,7 +33,8 @@ internal static class CodexWindowClassifier
         var sameProcess = candidates
             .Where(item => item.ProcessId == foreground.ProcessId && item.IsCodexProcess)
             .ToArray();
-        var host = sameProcess
+        // A real foreground editor is authoritative. Popups still use the existing host fallback.
+        var host = IsHost(foreground) ? foreground : sameProcess
             .Where(IsHost)
             .OrderByDescending(Area)
             .ThenBy(item => item.Handle.ToInt64())

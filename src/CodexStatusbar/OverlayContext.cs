@@ -43,6 +43,8 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     private readonly Dictionary<AttachmentReferencePoint, ToolStripMenuItem> _anchorPointItems = new();
     private readonly Dictionary<OverlayPositionMode, ToolStripMenuItem> _positionModeItems = new();
     private readonly Dictionary<OverlayThemePreference, ToolStripMenuItem> _themeItems = new();
+    private readonly Dictionary<OverlayLanguage, ToolStripMenuItem> _languageItems = new();
+    private readonly List<(ToolStripMenuItem Item, string Chinese, string English)> _localizedMenuItems = new();
     private readonly Dictionary<AnchorMode, ToolStripMenuItem> _anchorItems = new();
     private readonly Dictionary<DisplayField, ToolStripMenuItem> _fieldItems = new();
     private readonly Dictionary<(CollapsedSlot Slot, DisplayField Field), ToolStripMenuItem>
@@ -105,6 +107,8 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     private OverlayPresentation _presentation;
     private CodexWindowTarget? _currentTarget;
     private ManualPlacementSnapshot? _settingsSnapshotBeforeEdit;
+    private OverlayPositionMode _editPositionMode;
+    private Point _editFixedScreenPosition;
     private bool _saveFailureNotified;
     private TokenSnapshot? _lastSnapshot;
     private bool _manuallyHidden;
@@ -180,10 +184,11 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         };
         _dockTracker.Start();
         _presentation = OverlayPresentationBuilder.CreateWaiting(
-            "正在寻找当前 Codex 会话…",
+            Text("正在寻找当前 Codex 会话…", "Looking for the current Codex thread…"),
             _settings.CollapsedPrimaryField,
             _settings.CollapsedSecondaryField,
-            _settings.VisibleFields);
+            _settings.VisibleFields,
+            _settings.Language);
         _ = _targetHighlight.Handle;
         _themeBinding = new OverlayThemeBinding(
             _targetHighlight,
@@ -194,17 +199,17 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
 
         // Lifecycle status first: with the watcher running these two lines answer "is Codex up, and is
         // the strip attached to it" without opening the debug log.
-        _statusCodexItem = new ToolStripMenuItem("Codex：检测中…") { Enabled = false };
-        _statusBarItem = new ToolStripMenuItem("状态条：启动中…") { Enabled = false };
-        var statusMenu = new ToolStripMenuItem("Status  ·  状态");
+        _statusCodexItem = LocalizedMenuItem("Codex：检测中…", "Codex: Detecting…", enabled: false);
+        _statusBarItem = LocalizedMenuItem("状态条：启动中…", "Statusbar: Starting…", enabled: false);
+        var statusMenu = LocalizedMenuItem("状态", "Status");
         statusMenu.DropDownItems.Add(_statusCodexItem);
         statusMenu.DropDownItems.Add(_statusBarItem);
         menu.Items.Add(statusMenu);
         menu.Items.Add(new ToolStripSeparator());
 
-        _sessionMenuItem = new ToolStripMenuItem("会话：等待数据") { Enabled = false };
+        _sessionMenuItem = LocalizedMenuItem("会话：等待数据", "Thread: Waiting for data", enabled: false);
         menu.Items.Add(_sessionMenuItem);
-        _pinSessionMenuItem = new ToolStripMenuItem("锁定当前会话") { Enabled = false, CheckOnClick = true };
+        _pinSessionMenuItem = LocalizedMenuItem("锁定当前会话", "Pin current thread", enabled: false, checkOnClick: true);
         _pinSessionMenuItem.CheckedChanged += (_, _) =>
         {
             if (_monitor is { } monitor)
@@ -212,40 +217,33 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
                 monitor.PinActiveSession = _pinSessionMenuItem.Checked;
             }
 
-            _pinSessionMenuItem.Text = _pinSessionMenuItem.Checked ? "已锁定当前会话" : "锁定当前会话";
+            UpdatePinSessionText();
         };
         menu.Items.Add(_pinSessionMenuItem);
         menu.Items.Add(new ToolStripSeparator());
 
-        _adjustManualMenuItem = new ToolStripMenuItem("Adjust Position  ·  调整位置");
+        _adjustManualMenuItem = LocalizedMenuItem("调整位置", "Adjust position");
         _adjustManualMenuItem.Click += (_, _) => BeginManualEditing();
         menu.Items.Add(_adjustManualMenuItem);
-        _saveManualMenuItem = new ToolStripMenuItem("Lock Position  ·  锁定位置") { Visible = false };
+        _saveManualMenuItem = LocalizedMenuItem("锁定位置", "Lock position", visible: false);
         _saveManualMenuItem.Click += (_, _) => SaveManualEditing();
         menu.Items.Add(_saveManualMenuItem);
-        _cancelManualMenuItem = new ToolStripMenuItem("取消调整") { Visible = false };
+        _cancelManualMenuItem = LocalizedMenuItem("取消调整", "Cancel adjustment", visible: false);
         _cancelManualMenuItem.Click += (_, _) => CancelManualEditing();
         menu.Items.Add(_cancelManualMenuItem);
-        _resetManualMenuItem = new ToolStripMenuItem("Reset Position  ·  重置位置");
+        _resetManualMenuItem = LocalizedMenuItem("重置位置", "Reset position");
         _resetManualMenuItem.Click += (_, _) => ResetManualPlacement();
         menu.Items.Add(_resetManualMenuItem);
 
-        _positionInfoMenuItem = new ToolStripMenuItem("位置：--") { Enabled = false };
+        _positionInfoMenuItem = LocalizedMenuItem("位置：--", "Position: --", enabled: false);
         menu.Items.Add(_positionInfoMenuItem);
 
         // The manual counterpart of --position-fast-debug: it only changes how often the
         // [position-performance] block is summarised, so it stays useful without a restart. It needs the
         // debug log to exist at all, so without --debug it says so rather than looking broken.
-        _positionDiagnosticsMenuItem = new ToolStripMenuItem("Position diagnostics  ·  位置诊断")
-        {
-            CheckOnClick = true,
-            Enabled = _debug.Enabled,
-            Checked = _positionDiagnostics
-        };
-        if (!_debug.Enabled)
-        {
-            _positionDiagnosticsMenuItem.Text += "（需要 --debug）";
-        }
+        _positionDiagnosticsMenuItem = LocalizedMenuItem("位置诊断", "Position diagnostics",
+            enabled: _debug.Enabled, checkOnClick: true);
+        _positionDiagnosticsMenuItem.Checked = _positionDiagnostics;
 
         _positionDiagnosticsMenuItem.CheckedChanged += (_, _) =>
         {
@@ -256,35 +254,39 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         };
         menu.Items.Add(_positionDiagnosticsMenuItem);
 
-        var anchorMenu = new ToolStripMenuItem("Anchor  ·  锚点");
+        var anchorMenu = LocalizedMenuItem("锚点", "Anchor");
         foreach (var anchor in AnchorPoints)
         {
             AddAnchorPointMenu(anchorMenu, anchor);
         }
         menu.Items.Add(anchorMenu);
 
-        var positionModeMenu = new ToolStripMenuItem("Position  ·  定位");
+        var positionModeMenu = LocalizedMenuItem("定位", "Position");
         AddPositionModeMenu(
             positionModeMenu,
-            "Dock left of Context  ·  停靠到 Context 左侧",
+            "停靠到上下文左侧", "Dock left of Context",
             OverlayPositionMode.ComposerContextLeft);
         AddPositionModeMenu(
             positionModeMenu,
-            "Manual position  ·  手动位置",
+            "手动位置", "Manual position",
             OverlayPositionMode.FollowCodex);
         AddPositionModeMenu(
             positionModeMenu,
-            "Fixed on Screen  ·  固定屏幕位置",
+            "固定屏幕位置", "Fixed on screen",
             OverlayPositionMode.FixedScreen);
         menu.Items.Add(positionModeMenu);
 
-        var themeMenu = new ToolStripMenuItem("主题");
-        AddThemeMenu(themeMenu, "Auto  ·  跟随系统", OverlayThemePreference.Auto);
-        AddThemeMenu(themeMenu, "Dark  ·  深色文字", OverlayThemePreference.Dark);
-        AddThemeMenu(themeMenu, "Light  ·  浅色文字", OverlayThemePreference.Light);
+        var themeMenu = LocalizedMenuItem("主题", "Theme");
+        PopulateThemeMenu(themeMenu);
         menu.Items.Add(themeMenu);
 
-        _transparencyMenuItem = new ToolStripMenuItem("透明背景") { CheckOnClick = true };
+        // Keep this entry and each language's native name readable in either display language.
+        var languageMenu = new ToolStripMenuItem("语言 / Language");
+        AddLanguageMenu(languageMenu, "简体中文", OverlayLanguage.Chinese);
+        AddLanguageMenu(languageMenu, "English", OverlayLanguage.English);
+        menu.Items.Add(languageMenu);
+
+        _transparencyMenuItem = LocalizedMenuItem("透明背景", "Transparent background", checkOnClick: true);
         _transparencyMenuItem.Checked = _settings.TransparentBackground;
         _transparencyMenuItem.CheckedChanged += (_, _) =>
         {
@@ -297,7 +299,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         // Off by default. Docked inside the composer the strip uses Codex's own text colour on Codex's
         // own background, so the shadow adds nothing but a halo; this exists so it can be turned back
         // on if the strip is ever moved somewhere it disagrees with its backdrop.
-        _textShadowMenuItem = new ToolStripMenuItem("文字阴影") { CheckOnClick = true };
+        _textShadowMenuItem = LocalizedMenuItem("文字阴影", "Text shadow", checkOnClick: true);
         _textShadowMenuItem.Checked = _settings.TextShadow;
         _textShadowMenuItem.CheckedChanged += (_, _) =>
         {
@@ -308,40 +310,39 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         menu.Items.Add(_textShadowMenuItem);
         menu.Items.Add(new ToolStripSeparator());
 
-        _traditionalMenuItem = new ToolStripMenuItem("传统定位");
-        AddAnchorMenu(_traditionalMenuItem, "标题栏右上", AnchorMode.TitleBarTopRight);
-        AddAnchorMenu(_traditionalMenuItem, "自动吸附", AnchorMode.Auto);
-        AddAnchorMenu(_traditionalMenuItem, "窗口内右上", AnchorMode.InsideTopRight);
-        AddAnchorMenu(_traditionalMenuItem, "窗口内右下", AnchorMode.InsideBottomRight);
+        _traditionalMenuItem = LocalizedMenuItem("传统定位", "Legacy positioning");
+        AddAnchorMenu(_traditionalMenuItem, "标题栏右上", "Title bar top right", AnchorMode.TitleBarTopRight);
+        AddAnchorMenu(_traditionalMenuItem, "自动吸附", "Automatic", AnchorMode.Auto);
+        AddAnchorMenu(_traditionalMenuItem, "窗口内右上", "Inside top right", AnchorMode.InsideTopRight);
+        AddAnchorMenu(_traditionalMenuItem, "窗口内右下", "Inside bottom right", AnchorMode.InsideBottomRight);
         menu.Items.Add(_traditionalMenuItem);
         menu.Items.Add(new ToolStripSeparator());
 
-        var collapsedFieldsMenu = new ToolStripMenuItem("收起时显示");
-        var primaryMenu = new ToolStripMenuItem("左侧指标");
-        var secondaryMenu = new ToolStripMenuItem("右侧指标");
+        var collapsedFieldsMenu = LocalizedMenuItem("收起时显示", "Collapsed fields");
+        var primaryMenu = LocalizedMenuItem("左侧指标", "Left metric");
+        var secondaryMenu = LocalizedMenuItem("右侧指标", "Right metric");
         foreach (var field in DisplayFieldRules.Ordered)
         {
-            var text = OverlayPresentationBuilder.GetFieldMenuText(field);
-            AddCollapsedFieldMenu(primaryMenu, text, CollapsedSlot.Primary, field);
-            AddCollapsedFieldMenu(secondaryMenu, text, CollapsedSlot.Secondary, field);
+            AddCollapsedFieldMenu(primaryMenu, CollapsedSlot.Primary, field);
+            AddCollapsedFieldMenu(secondaryMenu, CollapsedSlot.Secondary, field);
         }
         collapsedFieldsMenu.DropDownItems.Add(primaryMenu);
         collapsedFieldsMenu.DropDownItems.Add(secondaryMenu);
         menu.Items.Add(collapsedFieldsMenu);
 
-        var fieldsMenu = new ToolStripMenuItem("显示字段");
+        var fieldsMenu = LocalizedMenuItem("显示字段", "Visible fields");
         foreach (var field in DisplayFieldRules.Ordered)
         {
-            AddVisibleFieldMenu(fieldsMenu, OverlayPresentationBuilder.GetFieldMenuText(field), field);
+            AddVisibleFieldMenu(fieldsMenu, field);
         }
         menu.Items.Add(fieldsMenu);
         menu.Items.Add(new ToolStripSeparator());
 
-        _detailMenuItem = new ToolStripMenuItem("详情面板  ·  展开 / 收起");
+        _detailMenuItem = LocalizedMenuItem("详情面板 · 展开 / 收起", "Details · Expand / Collapse");
         _detailMenuItem.Click += (_, _) => ToggleDetailPanel();
         menu.Items.Add(_detailMenuItem);
 
-        _visibilityMenuItem = new ToolStripMenuItem("暂时隐藏");
+        _visibilityMenuItem = LocalizedMenuItem("暂时隐藏", "Hide temporarily");
         _visibilityMenuItem.Click += (_, _) =>
         {
             if (_manualAttachment.IsEditing)
@@ -349,7 +350,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
                 CancelManualEditing();
             }
             _manuallyHidden = !_manuallyHidden;
-            _visibilityMenuItem.Text = _manuallyHidden ? "恢复显示" : "暂时隐藏";
+            UpdateVisibilityText();
             if (_manuallyHidden)
             {
                 CollapseAndHide();
@@ -363,15 +364,12 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
 
         // Lifecycle controls. "Start with Windows" is a toggle onto HKCU\...\Run — no elevation, and
 // the state shown is the registry's, not an intention.
-        _startWithWindowsItem = new ToolStripMenuItem("Start with Windows  ·  开机自动启动")
-        {
-            CheckOnClick = true,
-            Checked = _startupRegistryEnabled
-        };
+        _startWithWindowsItem = LocalizedMenuItem("开机自动启动", "Start with Windows", checkOnClick: true);
+        _startWithWindowsItem.Checked = _startupRegistryEnabled;
         if (portableMode)
         {
             _startWithWindowsItem.Enabled = false;
-            _startWithWindowsItem.ToolTipText = "便携模式使用解压目录中的设置";
+            _startWithWindowsItem.ToolTipText = Text("便携模式使用解压目录中的设置", "Portable mode uses settings in the extracted folder");
         }
         else
         {
@@ -379,23 +377,23 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         }
         menu.Items.Add(_startWithWindowsItem);
 
-        var attachNowItem = new ToolStripMenuItem("Start / Attach now  ·  立即检测并附着");
+        var attachNowItem = LocalizedMenuItem("立即检测并附着", "Start / Attach now");
         attachNowItem.Click += (_, _) => AttachNow();
         menu.Items.Add(attachNowItem);
 
-        var restartItem = new ToolStripMenuItem("Restart Statusbar  ·  重启状态条");
+        var restartItem = LocalizedMenuItem("重启状态条", "Restart Statusbar");
         restartItem.Click += (_, _) => RestartOverlay();
         menu.Items.Add(restartItem);
         menu.Items.Add(new ToolStripSeparator());
 
-        var exitItem = new ToolStripMenuItem("退出");
+        var exitItem = LocalizedMenuItem("退出", "Exit");
         exitItem.Click += (_, _) => ExitOverlay();
         menu.Items.Add(exitItem);
 
         _trayIcon = new NotifyIcon
         {
             Icon = SystemIcons.Information,
-            Text = "Codex Token 状态条",
+            Text = Text("Codex Token 状态条", "Codex Token Statusbar"),
             Visible = true,
             ContextMenuStrip = menu
         };
@@ -411,6 +409,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _hotkey.Pressed += (_, _) => ToggleManualEditing();
         _hotkey.TryRegister();
         _menuReady = true;
+        RefreshLanguageText();
         UpdateAnchorChecks();
         UpdateManualMenuState();
         UpdateFieldChecks();
@@ -432,9 +431,116 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _timer.Start();
     }
 
-    private void AddAnchorMenu(ToolStripMenuItem menu, string text, AnchorMode mode)
+    private string Text(string chinese, string english) =>
+        OverlayText.Choose(_settings.Language, chinese, english);
+
+    private ToolStripMenuItem LocalizedMenuItem(
+        string chinese,
+        string english,
+        bool enabled = true,
+        bool visible = true,
+        bool checkOnClick = false)
     {
-        var item = new ToolStripMenuItem(text);
+        var item = new ToolStripMenuItem(Text(chinese, english))
+        {
+            Enabled = enabled,
+            Visible = visible,
+            CheckOnClick = checkOnClick
+        };
+        _localizedMenuItems.Add((item, chinese, english));
+        return item;
+    }
+
+    private ToolStripMenuItem FieldMenuItem(DisplayField field) => LocalizedMenuItem(
+        OverlayPresentationBuilder.GetFieldMenuText(field, OverlayLanguage.Chinese),
+        OverlayPresentationBuilder.GetFieldMenuText(field, OverlayLanguage.English));
+
+    private void AddLanguageMenu(ToolStripMenuItem parent, string name, OverlayLanguage language)
+    {
+        var item = new ToolStripMenuItem(name);
+        item.Click += (_, _) =>
+        {
+            if (_settings.Language == language || _manualAttachment.IsEditing)
+            {
+                return;
+            }
+
+            var previous = _settings.Language;
+            _settings.Language = language;
+            if (!_settings.TrySave(_settingsPath))
+            {
+                _settings.Language = previous;
+                _trayIcon.ShowBalloonTip(3000, Text("Codex Token 状态条", "Codex Token Statusbar"),
+                    Text("无法保存语言设置，请检查设置文件权限后重试。",
+                        "Cannot save the language setting. Check the settings file permissions and try again."),
+                    ToolTipIcon.Warning);
+                return;
+            }
+
+            RefreshLanguageText();
+            // Rebuild the presentation and its measured widths even if the snapshot did not change.
+            RefreshPresentation();
+            if (_currentTarget is not null && !_manuallyHidden)
+            {
+                ApplyLayout(_currentTarget);
+            }
+        };
+        _languageItems[language] = item;
+        parent.DropDownItems.Add(item);
+    }
+
+    private void RefreshLanguageText()
+    {
+        foreach (var (item, chinese, english) in _localizedMenuItems)
+        {
+            item.Text = Text(chinese, english);
+        }
+        foreach (var (language, item) in _languageItems)
+        {
+            item.Checked = language == _settings.Language;
+        }
+        if (!_debug.Enabled)
+        {
+            _positionDiagnosticsMenuItem.Text += Text("（需要 --debug）", " (requires --debug)");
+        }
+        if (!_startWithWindowsItem.Enabled)
+        {
+            _startWithWindowsItem.ToolTipText = Text("便携模式使用解压目录中的设置",
+                "Portable mode uses settings in the extracted folder");
+        }
+
+        UpdatePinSessionText();
+        UpdateVisibilityText();
+        UpdateManualMenuState();
+        UpdateSessionMenuText();
+        _lifecycleMenuText = string.Empty;
+        UpdateLifecycleMenuText();
+        UpdateTrayTooltip();
+    }
+
+    private void UpdatePinSessionText() => _pinSessionMenuItem.Text = _pinSessionMenuItem.Checked
+        ? Text("已锁定当前会话", "Current thread pinned")
+        : Text("锁定当前会话", "Pin current thread");
+
+    private void UpdateVisibilityText() => _visibilityMenuItem.Text = _manuallyHidden
+        ? Text("恢复显示", "Show statusbar")
+        : Text("暂时隐藏", "Hide temporarily");
+
+    private void UpdateTrayTooltip()
+    {
+        _trayIcon.Text = _lastSnapshot is null
+            ? TrimTrayText(_watcher.Current.IsRunning
+                ? Text("Codex 状态条 — 运行中", "Codex Statusbar — Active")
+                : Text("Codex 状态条 — 等待 Codex", "Codex Statusbar — Waiting for Codex"))
+            : _lastSnapshot == TokenSnapshot.Draft
+                ? Text("Codex · 新会话 · 0 tokens", "Codex · New thread · 0 tokens")
+                : TrimTrayText($"Codex {OverlayPresentationBuilder.ShortThreadId(_lastSnapshot.ThreadId)} · "
+                    + $"{OverlayPresentationBuilder.FormatTokenCount(_lastSnapshot.TotalTokens)} tokens");
+    }
+
+    private void AddAnchorMenu(ToolStripMenuItem menu, string chinese, string english, AnchorMode mode)
+    {
+        var item = LocalizedMenuItem(chinese, english);
         item.Click += (_, _) =>
         {
             if (_manualAttachment.IsEditing)
@@ -442,7 +548,10 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
                 CancelManualEditing();
             }
             _settings.ManualPlacementEnabled = false;
+            // A legacy anchor is a complete placement choice, so it must leave composer docking.
+            _settings.PositionMode = OverlayPositionMode.FollowCodex;
             _settings.AnchorMode = mode;
+            _dockTracker.Enabled = false;
             _settings.Save(_settingsPath);
             UpdateAnchorChecks();
             UpdateManualMenuState();
@@ -455,9 +564,9 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         menu.DropDownItems.Add(item);
     }
 
-    private void AddVisibleFieldMenu(ToolStripMenuItem parent, string text, DisplayField field)
+    private void AddVisibleFieldMenu(ToolStripMenuItem parent, DisplayField field)
     {
-        var item = new ToolStripMenuItem(text) { CheckOnClick = false };
+        var item = FieldMenuItem(field);
         item.Click += (_, _) =>
         {
             var updated = _settings.VisibleFields.HasFlag(field)
@@ -483,11 +592,10 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
 
     private void AddCollapsedFieldMenu(
         ToolStripMenuItem parent,
-        string text,
         CollapsedSlot slot,
         DisplayField field)
     {
-        var item = new ToolStripMenuItem(text) { CheckOnClick = false };
+        var item = FieldMenuItem(field);
         item.Click += (_, _) =>
         {
             if (!_settings.SelectCollapsedField(slot, field))
@@ -527,7 +635,9 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     /// </summary>
     private void AddAnchorPointMenu(ToolStripMenuItem menu, AttachmentReferencePoint anchor)
     {
-        var item = new ToolStripMenuItem(anchor.ToString());
+        var item = LocalizedMenuItem(
+            OverlayText.AnchorName(OverlayLanguage.Chinese, anchor),
+            OverlayText.AnchorName(OverlayLanguage.English, anchor));
         item.Click += (_, _) =>
         {
             if (_manualAttachment.IsEditing)
@@ -549,9 +659,9 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         menu.DropDownItems.Add(item);
     }
 
-    private void AddPositionModeMenu(ToolStripMenuItem menu, string text, OverlayPositionMode mode)
+    private void AddPositionModeMenu(ToolStripMenuItem menu, string chinese, string english, OverlayPositionMode mode)
     {
-        var item = new ToolStripMenuItem(text);
+        var item = LocalizedMenuItem(chinese, english);
         item.Click += (_, _) =>
         {
             if (_manualAttachment.IsEditing)
@@ -583,9 +693,17 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         menu.DropDownItems.Add(item);
     }
 
-    private void AddThemeMenu(ToolStripMenuItem menu, string text, OverlayThemePreference preference)
+    private void PopulateThemeMenu(ToolStripMenuItem menu)
     {
-        var item = new ToolStripMenuItem(text);
+        AddThemeMenu(menu, "自动 · 跟随系统", "Auto · Follow system", OverlayThemePreference.Auto);
+        // Stored names describe the background palette; the menu describes the glyph colour.
+        AddThemeMenu(menu, "深色文字", "Dark text", OverlayThemePreference.Light);
+        AddThemeMenu(menu, "浅色文字", "Light text", OverlayThemePreference.Dark);
+    }
+
+    private void AddThemeMenu(ToolStripMenuItem menu, string chinese, string english, OverlayThemePreference preference)
+    {
+        var item = LocalizedMenuItem(chinese, english);
         item.Click += (_, _) =>
         {
             _settings.ThemePreference = preference;
@@ -632,6 +750,11 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _resetManualMenuItem.Enabled = !editing;
         _traditionalMenuItem.Enabled = !editing;
         _detailMenuItem.Enabled = !editing;
+        foreach (var item in _languageItems.Values)
+        {
+            // Avoid persisting an unfinished placement draft through an unrelated settings save.
+            item.Enabled = !editing;
+        }
         _transparencyMenuItem.Checked = _settings.TransparentBackground;
         if (_textShadowMenuItem is not null)
         {
@@ -662,8 +785,10 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
             if (pair.Key == OverlayThemePreference.Auto)
             {
                 // Show what auto actually resolved to, so a mismatch is visible without opening the log.
-                pair.Value.Text = $"Auto  ·  跟随 Codex ({( _effectiveTheme == OverlayThemeKind.Light ? "Light" : "Dark")}" +
-                    $"，来源 {_effectiveThemeSource})";
+                var themeName = _effectiveTheme == OverlayThemeKind.Light
+                    ? Text("浅色", "Light") : Text("深色", "Dark");
+                pair.Value.Text = Text($"自动 · 跟随 Codex（{themeName}，来源 {_effectiveThemeSource}）",
+                    $"Auto · Follow Codex ({themeName}, source: {_effectiveThemeSource})");
             }
         }
 
@@ -671,11 +796,15 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _positionInfoMenuItem.Text = _settings.PositionMode switch
         {
             OverlayPositionMode.ComposerContextLeft =>
-                $"位置：停靠 Context 左侧 · 间距 {_settings.ContextGapDip:0} DIP · 来源 {_lastDock.DescribeSource()}",
+                Text($"位置：停靠上下文左侧 · 间距 {_settings.ContextGapDip:0} DIP · 来源 {_lastDock.DescribeSource()}",
+                    $"Position: Left of Context · Gap {_settings.ContextGapDip:0} DIP · Source {_lastDock.DescribeSource()}"),
             OverlayPositionMode.FixedScreen =>
-                $"位置：Fixed on Screen ({_settings.FixedScreenPosition.X}, {_settings.FixedScreenPosition.Y}) px",
-            _ => $"位置：Follow Codex · {attachment.ReferencePoint} · 偏移 ("
-                + $"{attachment.OffsetXDip:0}, {attachment.OffsetYDip:0}) DIP"
+                Text($"位置：固定屏幕位置 ({_settings.FixedScreenPosition.X}, {_settings.FixedScreenPosition.Y}) px",
+                    $"Position: Fixed on screen ({_settings.FixedScreenPosition.X}, {_settings.FixedScreenPosition.Y}) px"),
+            _ => Text($"位置：跟随 Codex · {OverlayText.AnchorName(_settings.Language, attachment.ReferencePoint)} · 偏移 "
+                    + $"({attachment.OffsetXDip:0}, {attachment.OffsetYDip:0}) DIP",
+                $"Position: Follow Codex · {OverlayText.AnchorName(_settings.Language, attachment.ReferencePoint)} · Offset "
+                    + $"({attachment.OffsetXDip:0}, {attachment.OffsetYDip:0}) DIP")
         };
     }
 
@@ -821,7 +950,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _lastPositionSignature = null;
         _pinSessionMenuItem.Enabled = false;
         RefreshPresentation();
-        _trayIcon.Text = TrimTrayText("Codex Statusbar — Waiting for Codex");
+        UpdateTrayTooltip();
         _debug.Event("subsystems stopped · overlay hidden");
         WriteLifecycleBlock();
     }
@@ -1041,7 +1170,10 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     // ------------------------------------------------------- IFastPathTarget (the real window)
 
     bool IFastPathTarget.CanTrack =>
-        _form.Visible && _currentTarget is not null && _hostSampler.Window != IntPtr.Zero
+        // Fixed screen coordinates are resolved by the accurate layout, never by host deltas.
+        _settings.PositionMode != OverlayPositionMode.FixedScreen
+        && !_manualAttachment.IsEditing
+        && _form.Visible && _currentTarget is not null && _hostSampler.Window != IntPtr.Zero
         && _routeStatus.Version == _routeMonitor.Version
         && (_settings.PositionMode != OverlayPositionMode.ComposerContextLeft
             || _dockTracker.Latest.CanDock(_currentTarget.HostWindow.Handle.ToInt64(), _routeStatus.Version));
@@ -1181,11 +1313,13 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     {
         var codex = _watcher.Current;
         var codexText = codex.IsRunning
-            ? $"Codex：运行中 · PID {codex.ProcessId} · {codex.Package}"
-            : "Codex：未运行";
-        var barText = "状态条：" + _lifecycle.StateSummary
+            ? Text($"Codex：运行中 · PID {codex.ProcessId} · {codex.Package}",
+                $"Codex: Running · PID {codex.ProcessId} · {codex.Package}")
+            : Text("Codex：未运行", "Codex: Not running");
+        var barText = Text("状态条：", "Statusbar: ")
+            + OverlayText.LifecycleState(_settings.Language, _lifecycle.State)
             + (_lifecycle.State == CodexLifecycleState.Attaching
-                ? $"（第 {_lifecycle.AttachAttempt} 次尝试）"
+                ? Text($"（第 {_lifecycle.AttachAttempt} 次尝试）", $" (attempt {_lifecycle.AttachAttempt})")
                 : string.Empty);
 
         var signature = codexText + "\u001f" + barText;
@@ -1202,8 +1336,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         // the conversation id and its token count instead, which is more useful than the state name.
         if (_lastSnapshot is null)
         {
-            _trayIcon.Text = TrimTrayText(
-                codex.IsRunning ? "Codex Statusbar — Active" : "Codex Statusbar — Waiting for Codex");
+            UpdateTrayTooltip();
         }
     }
 
@@ -1497,13 +1630,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _debug.Write(snapshot);
         RefreshPresentation();
         _pinSessionMenuItem.Enabled = !string.IsNullOrWhiteSpace(snapshot?.ThreadId);
-        _trayIcon.Text = snapshot is null
-            ? "Codex Statusbar"
-            : snapshot == TokenSnapshot.Draft
-                ? "Codex · 新会话 · 0 tokens"
-                : TrimTrayText(
-                    $"Codex {OverlayPresentationBuilder.ShortThreadId(snapshot.ThreadId)} · "
-                    + $"{OverlayPresentationBuilder.FormatTokenCount(snapshot.TotalTokens)} tokens");
+        UpdateTrayTooltip();
         UpdateSessionMenuText();
         return true;
     }
@@ -1562,15 +1689,17 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     {
         _presentation = _lastSnapshot is null
             ? OverlayPresentationBuilder.CreateWaiting(
-                "正在寻找当前 Codex 会话…",
+                Text("正在寻找当前 Codex 会话…", "Looking for the current Codex thread…"),
                 _settings.CollapsedPrimaryField,
                 _settings.CollapsedSecondaryField,
-                _settings.VisibleFields)
+                _settings.VisibleFields,
+                _settings.Language)
             : OverlayPresentationBuilder.Create(
                 _lastSnapshot,
                 _settings.CollapsedPrimaryField,
                 _settings.CollapsedSecondaryField,
-                _settings.VisibleFields);
+                _settings.VisibleFields,
+                _settings.Language);
         _form.SetPresentation(_presentation);
     }
 
@@ -1587,6 +1716,11 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
             return;
         }
 
+        if (_manualAttachment.IsEditing)
+        {
+            ApplyEditDraftLayout(target);
+            return;
+        }
         PlaceStrip(target, fastPath: false);
     }
 
@@ -1709,6 +1843,8 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
 
         UpdateOutsideClickPolling();
         _lastDesiredWindowBounds = layout.WindowBounds;
+        if (!fastPath && layout.State != OverlayVisualState.HiddenForSpace)
+            _hostSampler.AcceptAccurateLayout(target.HostWindow);
     }
 
     private void HideForUnusableHost(CodexWindowTarget? target = null)
@@ -2078,6 +2214,22 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         }
         _currentTarget = refreshedTarget;
 
+        BeginManualEditingForCurrentTarget();
+    }
+
+    // The host has already been refreshed; keep edit setup separate from native host discovery.
+    private void BeginManualEditingForCurrentTarget()
+    {
+        if (_currentTarget is null || _manualAttachment.IsEditing) return;
+
+        // Placement stays committed in _settings until Save succeeds. Theme/menu saves during an
+        // edit must never persist a partially dragged point or the temporary departure from docking.
+        _settingsSnapshotBeforeEdit = SnapshotFromSettings();
+        _editPositionMode = _settings.PositionMode == OverlayPositionMode.ComposerContextLeft
+            ? OverlayPositionMode.FollowCodex : _settings.PositionMode;
+        _editFixedScreenPosition = _settings.FixedScreenPosition;
+        var seed = _settingsSnapshotBeforeEdit;
+
         // Adjusting the position means leaving the dock, so the manual attachment is seeded from where
         // the strip actually is right now. Without this the draft would resolve from whatever anchor
         // was last saved (often the old top-centre default) and the strip would jump on the first
@@ -2086,26 +2238,26 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         {
             if (_form.CurrentLayout is not null && _form.Visible)
             {
-                _settings.MainAttachment = ManualAttachmentCalculator.Capture(
-                    _currentTarget.HostWindow.WindowBounds,
-                    CurrentCapsuleScreenBounds(),
-                    _currentTarget.HostWindow.Dpi);
+                seed = seed with
+                {
+                    MainAttachment = ManualAttachmentCalculator.Capture(
+                        _currentTarget.HostWindow.WindowBounds,
+                        CurrentCapsuleScreenBounds(),
+                        _currentTarget.HostWindow.Dpi)
+                };
             }
-
-            _settings.PositionMode = OverlayPositionMode.FollowCodex;
-            _settings.ManualPlacementEnabled = true;
-            _dockTracker.Enabled = false;
-            _settings.Save(_settingsPath);
         }
+        _dockTracker.Enabled = false;
 
         _interaction.CollapseForHostChange();
         StopOutsideClickPolling();
-        _settingsSnapshotBeforeEdit = SnapshotFromSettings();
         _saveFailureNotified = false;
         var transition = _manualAttachment.BeginEdit(
-            _settingsSnapshotBeforeEdit,
+            seed,
             CreateAttachmentTargets(_currentTarget),
             CapsuleSizeFor(_currentTarget));
+        if (_editPositionMode == OverlayPositionMode.FixedScreen)
+            transition = transition with { ResolvedTopLeft = _editFixedScreenPosition };
         ApplyEditTransition(_currentTarget, transition, applyLayout: true);
         _form.BeginEditMode(transition.Draft.ScalePercent);
         if (!_form.Visible)
@@ -2131,11 +2283,11 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         if (eventArgs.Kind == OverlayEditGestureKind.Move)
         {
             var capsuleScreen = CurrentCapsuleScreenBounds();
-            if (_settings.PositionMode == OverlayPositionMode.FixedScreen)
+            if (_editPositionMode == OverlayPositionMode.FixedScreen)
             {
                 // Fixed mode: the strip is where the pointer left it, full stop. Nothing is derived
                 // from the Codex window, so an absolute screen position is all we record.
-                _settings.FixedScreenPosition = new Point(capsuleScreen.X, capsuleScreen.Y);
+                _editFixedScreenPosition = new Point(capsuleScreen.X, capsuleScreen.Y);
                 _manualAttachment.EndGesturePreview();
                 UpdateManualMenuState();
                 return;
@@ -2179,9 +2331,9 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _manualAttachment.EndGesturePreview();
         var capsuleScreen = CurrentCapsuleScreenBounds();
         if (eventArgs.Kind == OverlayEditGestureKind.Move
-            && _settings.PositionMode == OverlayPositionMode.FixedScreen)
+            && _editPositionMode == OverlayPositionMode.FixedScreen)
         {
-            _settings.FixedScreenPosition = new Point(capsuleScreen.X, capsuleScreen.Y);
+            _editFixedScreenPosition = new Point(capsuleScreen.X, capsuleScreen.Y);
             UpdateManualMenuState();
             return;
         }
@@ -2214,13 +2366,16 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         }
         if (!CanCommitEditPosition)
         {
-            NotifySaveFailure("请先将状态条拖到 Codex 主窗口上。");
+            NotifySaveFailure(Text("请先将状态条拖到 Codex 主窗口上。", "Drag the statusbar onto the main Codex window first."));
             return;
         }
 
         var original = _settingsSnapshotBeforeEdit ?? SnapshotFromSettings();
+        var originalMode = _settings.PositionMode;
+        var originalPoint = _settings.FixedScreenPosition;
         var draft = _manualAttachment.Draft with { Enabled = true };
         ApplySnapshotToSettings(draft);
+        _settings.PositionMode = _editPositionMode;
         if (_settings.PositionMode == OverlayPositionMode.FixedScreen)
         {
             var capsuleScreen = CurrentCapsuleScreenBounds();
@@ -2230,7 +2385,10 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         if (!_settings.TrySave(_settingsPath))
         {
             ApplySnapshotToSettings(original);
-            NotifySaveFailure("无法保存设置，请检查设置文件权限后重试。");
+            _settings.PositionMode = originalMode;
+            _settings.FixedScreenPosition = originalPoint;
+            NotifySaveFailure(Text("无法保存设置，请检查设置文件权限后重试。",
+                "Cannot save settings. Check the settings file permissions and try again."));
             return;
         }
 
@@ -2249,7 +2407,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         }
 
         var cancelled = _manualAttachment.Cancel();
-        ApplySnapshotToSettings(cancelled.Draft);
+        ApplySnapshotToSettings(_settingsSnapshotBeforeEdit ?? cancelled.Draft);
         FinishManualEditing(restoreFocus, relayout);
     }
 
@@ -2267,8 +2425,8 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         {
             _trayIcon.ShowBalloonTip(
                 3000,
-                "Codex Token 状态条",
-                "无法保存重置后的设置。",
+                Text("Codex Token 状态条", "Codex Token Statusbar"),
+                Text("无法保存重置后的设置。", "Cannot save the reset settings."),
                 ToolTipIcon.Warning);
         }
 
@@ -2297,8 +2455,8 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
             HighlightBounds: _manualAttachment.ShouldShowStaticHighlight
                 ? target.HostWindow.WindowBounds
                 : null,
-            ResolvedTopLeft: _settings.PositionMode == OverlayPositionMode.FixedScreen
-                ? _settings.FixedScreenPosition
+            ResolvedTopLeft: _editPositionMode == OverlayPositionMode.FixedScreen
+                ? _editFixedScreenPosition
                 : ManualAttachmentCoordinator.ResolveTopLeft(
                     _manualAttachment.Draft,
                     CreateAttachmentTargets(target),
@@ -2311,7 +2469,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     /// committed; follow mode still refuses to save a position that was never dropped on the window.
     /// </summary>
     private bool CanCommitEditPosition =>
-        _settings.PositionMode == OverlayPositionMode.FixedScreen || _manualAttachment.CanSave;
+        _editPositionMode == OverlayPositionMode.FixedScreen || _manualAttachment.CanSave;
 
     private void ApplyEditTransition(
         CodexWindowTarget target,
@@ -2361,6 +2519,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _interaction.CollapseForHostChange();
         StopOutsideClickPolling();
         _settingsSnapshotBeforeEdit = null;
+        _dockTracker.Enabled = _settings.PositionMode == OverlayPositionMode.ComposerContextLeft;
         _saveFailureNotified = false;
         UpdateManualMenuState();
 
@@ -2388,7 +2547,7 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
         _saveFailureNotified = true;
         _trayIcon.ShowBalloonTip(
             3000,
-            "Codex Token 状态条",
+            Text("Codex Token 状态条", "Codex Token Statusbar"),
             message,
             ToolTipIcon.Warning);
     }
@@ -2502,11 +2661,11 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     {
         var threadId = _lastSnapshot?.ThreadId ?? _routeStatus.ThreadId;
         var shortId = _lastSnapshot == TokenSnapshot.Draft
-            ? "新会话"
+            ? Text("新会话", "New thread")
             : string.IsNullOrWhiteSpace(threadId)
-                ? "等待识别"
+                ? Text("等待识别", "Waiting for detection")
                 : OverlayPresentationBuilder.ShortThreadId(threadId);
-        _sessionMenuItem.Text = $"会话：{shortId}{RouteStatusSuffix(_routeStatus)}";
+        _sessionMenuItem.Text = Text("会话：", "Thread: ") + shortId + RouteStatusSuffix(_routeStatus);
     }
 
     private void ApplyTheme(OverlayThemePalette palette)
@@ -2563,13 +2722,13 @@ internal sealed class OverlayContext : ApplicationContext, IFastPathTarget
     private static string TrimTrayText(string value) =>
         value.Length <= 63 ? value : value[..63];
 
-    private static string RouteStatusSuffix(ActiveThreadRouteStatus status)
+    private string RouteStatusSuffix(ActiveThreadRouteStatus status)
     {
         if (status.ActiveWindowCount > 1)
         {
-            return $" · 多窗口 {status.ActiveWindowCount}";
+            return Text($" · 多窗口 {status.ActiveWindowCount}", $" · Multiple windows: {status.ActiveWindowCount}");
         }
-        return status.IsConnected ? " · 已同步" : " · 日志模式";
+        return status.IsConnected ? Text(" · 已同步", " · Synced") : Text(" · 日志模式", " · Log mode");
     }
 
     private void ExitOverlay()

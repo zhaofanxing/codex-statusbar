@@ -17,7 +17,8 @@ internal sealed record OverlayPresentation(
     bool ShowContextProgress,
     string? StatusText,
     string? CapsuleText = null,
-    IReadOnlyList<string>? CapsuleVariants = null)
+    IReadOnlyList<string>? CapsuleVariants = null,
+    OverlayLanguage Language = OverlayLanguage.Chinese)
 {
     /// <summary>
     /// The collapsed strip's text at every supported verbosity, widest first. The last entry is
@@ -51,11 +52,13 @@ internal static class OverlayPresentationBuilder
         string cache,
         bool hasUsage,
         SessionProgress? progress = null,
-        string? contextPercent = null)
+        string? contextPercent = null,
+        OverlayLanguage language = OverlayLanguage.Chinese)
     {
         var tokens = hasUsage || progress is { Turns: 0, Steps: 0 } ? total : "--";
         var cacheText = hasUsage ? cache : "--";
-        var context = $"{Separator}上下文 {contextPercent ?? "--"}";
+        var contextLabel = OverlayText.Choose(language, "上下文", "Context");
+        var context = $"{Separator}{contextLabel} {contextPercent ?? "--"}";
         string[] usageVariants =
         [
             // 0 — full
@@ -79,12 +82,18 @@ internal static class OverlayPresentationBuilder
             return usageVariants;
         }
 
+        var progressText = language == OverlayLanguage.English
+            ? string.Create(CultureInfo.InvariantCulture,
+                $"{counts.Turns} {(counts.Turns == 1 ? "turn" : "turns")} {counts.Steps} {(counts.Steps == 1 ? "step" : "steps")}")
+            : string.Create(CultureInfo.InvariantCulture, $"{counts.Turns} 轮 {counts.Steps} 步");
+        var compactProgress = language == OverlayLanguage.English
+            ? string.Create(CultureInfo.InvariantCulture, $"{counts.Turns}T{counts.Steps}S")
+            : string.Create(CultureInfo.InvariantCulture, $"{counts.Turns}轮{counts.Steps}步");
+        var cacheLabel = OverlayText.Choose(language, "缓存命中", "Cache hit");
         return
         [
-            string.Create(CultureInfo.InvariantCulture,
-                $"{counts.Turns} 轮 {counts.Steps} 步{Separator}{tps} tok/s{Separator}{tokens} tok{Separator}缓存命中 {cacheText}{context}"),
-            string.Create(CultureInfo.InvariantCulture,
-                $"{counts.Turns}轮{counts.Steps}步{Separator}{tps} t/s{Separator}{tokens}{Separator}{cacheText}{context}"),
+            $"{progressText}{Separator}{tps} tok/s{Separator}{tokens} tok{Separator}{cacheLabel} {cacheText}{context}",
+            $"{compactProgress}{Separator}{tps} t/s{Separator}{tokens}{Separator}{cacheText}{context}",
             .. usageVariants
         ];
     }
@@ -93,43 +102,48 @@ internal static class OverlayPresentationBuilder
         string statusText,
         DisplayField primaryField,
         DisplayField secondaryField,
-        DisplayField visibleFields)
+        DisplayField visibleFields,
+        OverlayLanguage language = OverlayLanguage.Chinese)
     {
         ValidateHighlightedFields(primaryField, secondaryField);
-        var variants = BuildCapsuleVariants("--", "--", "--", hasUsage: false);
+        var variants = BuildCapsuleVariants("--", "--", "--", hasUsage: false, language: language);
         return new OverlayPresentation(
-            CreateWaitingMetric(primaryField),
-            CreateWaitingMetric(secondaryField),
-            CreateExpandedRows(visibleFields, primaryField, secondaryField, CreateWaitingMetric),
+            CreateWaitingMetric(primaryField, language),
+            CreateWaitingMetric(secondaryField, language),
+            CreateExpandedRows(visibleFields, primaryField, secondaryField,
+                field => CreateWaitingMetric(field, language)),
             0,
             false,
             SanitizeSingleLine(statusText),
             variants[0],
-            variants);
+            variants,
+            language);
     }
 
     public static OverlayPresentation Create(
         TokenSnapshot snapshot,
         DisplayField primaryField,
         DisplayField secondaryField,
-        DisplayField visibleFields)
+        DisplayField visibleFields,
+        OverlayLanguage language = OverlayLanguage.Chinese)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ValidateHighlightedFields(primaryField, secondaryField);
-        var variants = BuildCapsuleVariants(snapshot);
+        var variants = BuildCapsuleVariants(snapshot, language);
         return new OverlayPresentation(
-            CreateMetric(snapshot, primaryField),
-            CreateMetric(snapshot, secondaryField),
+            CreateMetric(snapshot, primaryField, language),
+            CreateMetric(snapshot, secondaryField, language),
             CreateExpandedRows(
                 visibleFields,
                 primaryField,
                 secondaryField,
-                field => CreateMetric(snapshot, field)),
+                field => CreateMetric(snapshot, field, language)),
             snapshot.ContextPercent,
             snapshot.HasContextUsage && (visibleFields & DisplayField.ContextPercent) != 0,
             null,
             variants[0],
-            variants);
+            variants,
+            language);
     }
 
     public static string FormatTokenCount(long value) => value switch
@@ -160,8 +174,27 @@ internal static class OverlayPresentationBuilder
             singleLineThreadId.AsSpan(singleLineThreadId.Length - suffixLength, suffixLength));
     }
 
-    public static string GetFieldMenuText(DisplayField field)
+    public static string GetFieldMenuText(DisplayField field, OverlayLanguage language = OverlayLanguage.Chinese)
     {
+        if (language == OverlayLanguage.English)
+        {
+            return field switch
+            {
+                DisplayField.Total => "Total tokens",
+                DisplayField.Input => "Input tokens",
+                DisplayField.Output => "Output tokens",
+                DisplayField.CacheHit => "Cached tokens",
+                DisplayField.CacheHitRate => "Cache hit rate",
+                DisplayField.CacheMiss => "Uncached tokens (derived)",
+                DisplayField.Context => "Context usage",
+                DisplayField.ContextPercent => "Context percentage",
+                DisplayField.Reasoning => "Reasoning output",
+                DisplayField.Thread => "Thread ID",
+                DisplayField.Tps => "Output speed (TPS)",
+                _ => throw new ArgumentOutOfRangeException(nameof(field), field, "Unsupported display field.")
+            };
+        }
+
         return field switch
         {
             DisplayField.Total => "总 token",
@@ -183,25 +216,30 @@ internal static class OverlayPresentationBuilder
     /// The collapsed strip at every verbosity, widest first, as one line each:
     /// <c>⚡ 243 tok/s · 5.7M tok · Cache 98% · 上下文 7%</c>.
     ///
-    /// Total is rendered as <c>input + output</c> — the strict definition — not as the carrier's
-    /// own <c>total_tokens</c> field, so what is displayed is literally the documented formula.
+    /// Total uses <c>input + output</c> when those parts are available, otherwise the official
+    /// cumulative total (for example a database-only baseline). Cached input is never added again.
     /// Cache renders as <c>--</c> when input is 0, never as 0% or NaN. TPS renders as <c>--</c>
     /// whenever it is unknown, and gains a leading <c>~</c> while it is a held value.
     /// </summary>
-    public static IReadOnlyList<string> BuildCapsuleVariants(TokenSnapshot snapshot)
+    public static IReadOnlyList<string> BuildCapsuleVariants(
+        TokenSnapshot snapshot,
+        OverlayLanguage language = OverlayLanguage.Chinese)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return BuildCapsuleVariants(
             MetricFormat.FormatTps(snapshot.Tps, snapshot.TpsHeld, snapshot.TpsEstimated),
-            MetricFormat.CompactTokens(snapshot.InputTokens + snapshot.OutputTokens),
+            MetricFormat.CompactTokens(snapshot.HasTokenBreakdown
+                ? snapshot.InputTokens + snapshot.OutputTokens : snapshot.TotalTokens),
             MetricFormat.FormatCachePercentCompact(snapshot.InputTokens, snapshot.CachedInputTokens),
             snapshot.HasUsage,
             snapshot.Progress,
-            FormatContextPercent(snapshot));
+            FormatContextPercent(snapshot),
+            language);
     }
 
     /// <summary>The widest variant — what the strip shows whenever there is room for it.</summary>
-    public static string BuildCapsuleText(TokenSnapshot snapshot) => BuildCapsuleVariants(snapshot)[0];
+    public static string BuildCapsuleText(TokenSnapshot snapshot, OverlayLanguage language = OverlayLanguage.Chinese) =>
+        BuildCapsuleVariants(snapshot, language)[0];
 
     private static void ValidateHighlightedFields(DisplayField primaryField, DisplayField secondaryField)
     {
@@ -225,30 +263,32 @@ internal static class OverlayPresentationBuilder
             .ToArray();
     }
 
-    private static OverlayMetric CreateWaitingMetric(DisplayField field)
+    private static OverlayMetric CreateWaitingMetric(DisplayField field, OverlayLanguage language)
     {
-        var labels = GetLabels(field);
+        var labels = GetLabels(field, language);
         return new OverlayMetric(field, labels.Compact, labels.Expanded, NoValue, false);
     }
 
     private static OverlayMetric CreateMetric(
         TokenSnapshot snapshot,
-        DisplayField field)
+        DisplayField field,
+        OverlayLanguage language)
     {
-        var labels = GetLabels(field);
+        var labels = GetLabels(field, language);
+        var unknownParts = snapshot.HasUsage && !snapshot.HasTokenBreakdown;
         var value = field switch
         {
             DisplayField.Total => FormatTokenCount(snapshot.TotalTokens),
-            DisplayField.Input => FormatTokenCount(snapshot.InputTokens),
-            DisplayField.Output => FormatTokenCount(snapshot.OutputTokens),
-            DisplayField.CacheHit => FormatTokenCount(snapshot.CachedInputTokens),
+            DisplayField.Input => unknownParts ? NoValue : FormatTokenCount(snapshot.InputTokens),
+            DisplayField.Output => unknownParts ? NoValue : FormatTokenCount(snapshot.OutputTokens),
+            DisplayField.CacheHit => unknownParts ? NoValue : FormatTokenCount(snapshot.CachedInputTokens),
             DisplayField.CacheHitRate => snapshot.CacheHitPercent is { } rate ? $"{rate:0}%" : NoValue,
-            DisplayField.CacheMiss => FormatTokenCount(snapshot.UncachedInputTokens),
+            DisplayField.CacheMiss => unknownParts ? NoValue : FormatTokenCount(snapshot.UncachedInputTokens),
             DisplayField.Context => snapshot.HasContextUsage
                 ? $"{FormatTokenCount(snapshot.ContextUsedTokens)} / {FormatTokenCount(snapshot.ContextWindowTokens)}"
                 : NoValue,
             DisplayField.ContextPercent => FormatContextPercent(snapshot) ?? NoValue,
-            DisplayField.Reasoning => FormatTokenCount(snapshot.ReasoningOutputTokens),
+            DisplayField.Reasoning => unknownParts ? NoValue : FormatTokenCount(snapshot.ReasoningOutputTokens),
             DisplayField.Thread => ShortThreadId(snapshot.ThreadId),
             DisplayField.Tps => FormatTpsValue(snapshot),
             _ => throw new ArgumentOutOfRangeException(nameof(field), field, "不支持的展示字段。")
@@ -257,8 +297,27 @@ internal static class OverlayPresentationBuilder
         return new OverlayMetric(field, labels.Compact, labels.Expanded, value, hasValue);
     }
 
-    private static (string Compact, string Expanded) GetLabels(DisplayField field)
+    private static (string Compact, string Expanded) GetLabels(DisplayField field, OverlayLanguage language)
     {
+        if (language == OverlayLanguage.English)
+        {
+            return field switch
+            {
+                DisplayField.Total => ("Total", "Total tokens"),
+                DisplayField.Input => ("In", "Input"),
+                DisplayField.Output => ("Out", "Output"),
+                DisplayField.CacheHit => ("Cached", "Cached tokens"),
+                DisplayField.CacheHitRate => ("Hit rate", "Cache hit rate"),
+                DisplayField.CacheMiss => ("Uncached", "Uncached tokens"),
+                DisplayField.Context => ("Context", "Context usage"),
+                DisplayField.ContextPercent => ("Context", "Context used"),
+                DisplayField.Reasoning => ("Reasoning", "Reasoning output"),
+                DisplayField.Thread => ("Thread", "Thread"),
+                DisplayField.Tps => ("⚡", "Output speed"),
+                _ => throw new ArgumentOutOfRangeException(nameof(field), field, "Unsupported display field.")
+            };
+        }
+
         return field switch
         {
             DisplayField.Total => ("总", "总 Token"),
@@ -305,6 +364,7 @@ internal sealed class PresentationProbeCase
     public int? SecondaryField { get; set; }
     public int? VisibleFields { get; set; }
     public string? StatusText { get; set; }
+    public string? Language { get; set; }
 }
 
 internal sealed record PresentationProbeCaseResult(string Name, OverlayPresentation Presentation);
@@ -328,12 +388,14 @@ internal static class PresentationProbe
                     probeCase.Snapshot ?? throw new ArgumentException("Create 操作需要 Snapshot。", nameof(probeCase)),
                     primaryField,
                     secondaryField,
-                    visibleFields),
+                    visibleFields,
+                    OverlayText.ParseLanguage(probeCase.Language)),
                 "Waiting" => OverlayPresentationBuilder.CreateWaiting(
                     probeCase.StatusText ?? string.Empty,
                     primaryField,
                     secondaryField,
-                    visibleFields),
+                    visibleFields,
+                    OverlayText.ParseLanguage(probeCase.Language)),
                 _ => throw new ArgumentException($"不支持的展示探针操作：{probeCase.Operation}", nameof(probeCase))
             };
             results.Add(new PresentationProbeCaseResult(probeCase.Name, presentation));

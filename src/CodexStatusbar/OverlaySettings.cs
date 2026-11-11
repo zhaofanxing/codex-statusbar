@@ -150,6 +150,9 @@ internal sealed class OverlaySettings
         public bool? StartWithWindows { get; set; }
         public bool? StartupConfigured { get; set; }
 
+        // --- v5: independent display language (zh-CN / en) ---
+        public string? Language { get; set; }
+
         // --- v1 layout keys, still written for backward compatibility ---
         public int? AnchorMode { get; set; }
         public int? VisibleFields { get; set; }
@@ -167,7 +170,7 @@ internal sealed class OverlaySettings
         public double? OffsetYDip { get; set; }
     }
 
-    public const int CurrentSettingsVersion = 4;
+    public const int CurrentSettingsVersion = 5;
 
     /// <summary>
     /// The gap between the strip's right edge and the Context indicator's left edge, in DIP. The
@@ -193,6 +196,9 @@ internal sealed class OverlaySettings
     public OverlayPositionMode PositionMode { get; set; } = OverlayPositionMode.ComposerContextLeft;
 
     public OverlayThemePreference ThemePreference { get; set; } = OverlayThemePreference.Auto;
+
+    /// <summary>Preserve the existing Chinese display when upgrading or loading an unknown language.</summary>
+    public OverlayLanguage Language { get; set; } = OverlayLanguage.Chinese;
 
     /// <summary>Distance from the Context indicator's left edge, in DIP.</summary>
     public double ContextGapDip { get; set; } = DefaultContextGapDip;
@@ -314,6 +320,7 @@ internal sealed class OverlaySettings
 
             settings.TransparentBackground = persisted.TransparentBackground ?? true;
             settings.ThemePreference = ParseThemePreference(persisted.Theme);
+            settings.Language = OverlayText.ParseLanguage(persisted.Language);
             settings.ContextGapDip = SanitizeContextGap(persisted.ContextGapDip);
             settings.TextShadow = persisted.TextShadow ?? false;
             settings.FixedScreenPosition = new Point(
@@ -372,6 +379,9 @@ internal sealed class OverlaySettings
             // v4: lifecycle.
             StartWithWindows = StartWithWindows,
             StartupConfigured = StartupConfigured,
+
+            // v5: use stable language codes instead of enum names in the hand-editable schema.
+            Language = OverlayText.LanguageName(Language),
 
             // v1 keys, kept so an older build can still read this file.
             AnchorMode = (int)SanitizeAnchorMode((int)AnchorMode),
@@ -434,20 +444,34 @@ internal sealed class OverlaySettings
     public bool TrySave(string? settingsPath = null)
     {
         var path = settingsPath ?? DefaultSettingsPath;
+        string? temporaryPath = null;
         try
         {
-            var directory = Path.GetDirectoryName(path);
-            if (!string.IsNullOrWhiteSpace(directory))
+            path = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(directory);
+            temporaryPath = Path.Combine(directory, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            // Complete and flush the new settings beside the destination before an atomic rename.
+            // A failed write or replacement must leave the previously committed file intact.
+            using (var staged = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                Directory.CreateDirectory(directory);
+                staged.Write(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(Serialize()));
+                staged.Flush(flushToDisk: true);
             }
-
-            File.WriteAllText(path, Serialize(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            File.Move(temporaryPath, path, overwrite: true);
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return false;
+        }
+        finally
+        {
+            if (temporaryPath is not null)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            }
         }
     }
 

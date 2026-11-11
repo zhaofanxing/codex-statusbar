@@ -805,7 +805,8 @@ internal sealed class RolloutStreamState
 
         TotalTokens = tokensUsed;
         OutputTokens = 0;
-        InputTokens = tokensUsed;
+        // The database contains only a total, not an input/output/cache breakdown.
+        InputTokens = 0;
         CachedInputTokens = 0;
         HasCumulativeUsage = true;
     }

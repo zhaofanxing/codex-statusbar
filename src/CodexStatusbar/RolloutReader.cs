@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 
 namespace CodexStatusbar;
 
@@ -30,6 +31,7 @@ internal sealed class RolloutReader
     private readonly RolloutProgressReader _progressReader;
     private byte[] _pending = [];
     private string? _headIdentity;
+    private DateTime? _lastWriteUtc;
     private bool _initialized;
 
     public RolloutReader(string path, RolloutProgressReader? progressReader = null)
@@ -45,7 +47,7 @@ internal sealed class RolloutReader
 
     public SessionProgress? Progress { get; private set; }
 
-    /// <summary>Byte offset of the end of the last successfully parsed complete line.</summary>
+    /// <summary>Next unread byte; any unfinished record before this cursor is held in _pending.</summary>
     public long Offset { get; private set; }
 
     /// <summary>Total bytes handed to the parser so far (for the debug log).</summary>
@@ -86,6 +88,8 @@ internal sealed class RolloutReader
         }
 
         var length = SafeLength(stream);
+        var lastWriteUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+        _lastWriteUtc = lastWriteUtc;
         _headIdentity = ReadHeadIdentity(stream);
 
         if (length <= 0)
@@ -129,7 +133,7 @@ internal sealed class RolloutReader
             }
 
             ConsumeCompleteLines(bytes);
-            Offset = length - _pending.Length;
+            Offset = length;
 
             if (State.HasCumulativeUsage || tailStart == 0 || window >= length)
             {
@@ -149,6 +153,8 @@ internal sealed class RolloutReader
             TailWindowBytes = Math.Min(window, length);
         }
 
+        // Backward extension resets parser state; retain the timestamp captured with this read.
+        _lastWriteUtc = lastWriteUtc;
         AdvanceProgress(stream, length);
         _initialized = true;
     }
@@ -188,9 +194,12 @@ internal sealed class RolloutReader
         }
 
         var length = SafeLength(stream);
-        if (length < Offset)
+        var lastWriteUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+        if (length < Offset
+            || (length == Offset && _lastWriteUtc is { } previousWrite && previousWrite != lastWriteUtc))
         {
-            // Size shrank: the file was truncated or replaced. A fresh tail read is the only safe move.
+            // Like the history reader, treat a changed timestamp without growth as a rewrite.
+            // This catches edits anywhere in the file without hashing history on every poll.
             return RolloutUpdateResult.NeedsReinitialize;
         }
 
@@ -210,6 +219,7 @@ internal sealed class RolloutReader
 
         // History can still be catching up even when Codex has written no new bytes.
         AdvanceProgress(stream, length);
+        _lastWriteUtc = lastWriteUtc;
         if (appended <= 0)
         {
             return RolloutUpdateResult.Unchanged;
@@ -218,7 +228,7 @@ internal sealed class RolloutReader
         var bytes = ReadRange(stream, Offset, length);
         ParsedBytes += bytes.Length;
         ConsumeCompleteLines(bytes);
-        Offset = length - _pending.Length;
+        Offset += bytes.Length;
         return RolloutUpdateResult.Updated;
     }
 
@@ -250,6 +260,7 @@ internal sealed class RolloutReader
         State.Warnings.Clear();
         State.LineCount = 0;
         _pending = [];
+        _lastWriteUtc = null;
         Offset = 0;
         ParsedBytes = 0;
     }
@@ -295,11 +306,19 @@ internal sealed class RolloutReader
         var text = Encoding.UTF8.GetString(tail).Trim();
         if (text.Length > 0 && text.StartsWith('{') && text.EndsWith('}'))
         {
-            // A complete record whose trailing newline has not been flushed yet. A genuinely
-            // half-written line never parses, so it stays pending for the next read.
-            State.ObserveLine(text);
-            _pending = [];
-            return;
+            // A nested object can end a fragment with '}' before the outer record is complete.
+            // Validate UTF-8 JSON before consuming it; an unfinished EOF is not a malformed line.
+            try
+            {
+                using var document = JsonDocument.Parse(tail);
+                State.ObserveLine(text);
+                _pending = [];
+                return;
+            }
+            catch (JsonException)
+            {
+                // Keep the original bytes so split UTF-8 characters survive the next append.
+            }
         }
 
         if (tail.Length > TpsRules.TailReadBytes)

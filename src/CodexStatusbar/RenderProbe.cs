@@ -49,6 +49,22 @@ internal static class RenderProbe
             cases.Add(RenderCase(
                 outputDirectory, $"session-progress-{Name(theme)}", theme, 144, workingArea,
                 progressSnapshot, transparent: true, editMode: false));
+            foreach (var language in Enum.GetValues<OverlayLanguage>())
+            {
+                foreach (var dpi in new[] { 96u, 120u, 144u })
+                {
+                    cases.Add(RenderCase(outputDirectory,
+                        $"language-{OverlayText.LanguageName(language)}-{Name(theme)}-{dpi}dpi",
+                        theme, dpi, workingArea, progressSnapshot, transparent: true, editMode: false, language: language));
+                    cases.Add(RenderCase(outputDirectory,
+                        $"language-{OverlayText.LanguageName(language)}-expanded-{Name(theme)}-{dpi}dpi",
+                        theme, dpi, workingArea, progressSnapshot, transparent: true, editMode: false,
+                        language: language, expanded: true));
+                }
+                cases.Add(RenderCase(outputDirectory,
+                    $"language-{OverlayText.LanguageName(language)}-edit-{Name(theme)}",
+                    theme, 144, workingArea, progressSnapshot, transparent: true, editMode: true, language: language));
+            }
             foreach (var dpi in new[] { 96u, 120u, 144u })
             {
                 cases.Add(RenderCase(
@@ -128,7 +144,9 @@ internal static class RenderProbe
         IntRect workingArea,
         TokenSnapshot snapshot,
         bool transparent,
-        bool editMode)
+        bool editMode,
+        OverlayLanguage language = OverlayLanguage.Chinese,
+        bool expanded = false)
     {
         using var form = new TokenStripForm();
         form.SetTransparentBackground(transparent);
@@ -137,8 +155,9 @@ internal static class RenderProbe
             snapshot,
             DisplayField.Tps,
             DisplayField.Total,
-            DisplayFieldRules.PrimaryStripMask));
-        var layout = CalculateLayout(form, dpi, workingArea);
+            expanded ? DisplayFieldRules.SupportedMask : DisplayFieldRules.PrimaryStripMask,
+            language));
+        var layout = CalculateLayout(form, dpi, workingArea, expanded);
         form.ApplyLayout(layout);
         if (editMode)
         {
@@ -164,7 +183,7 @@ internal static class RenderProbe
             Theme: Name(theme),
             Dpi: dpi,
             Colours: transparent ? "text only" : "capsule fill + border",
-            Mode: editMode ? "edit" : "locked",
+            Mode: editMode ? "edit" : expanded ? "expanded" : "locked",
             Width: size.Width,
             Height: size.Height,
             TextWidthDip: Math.Round(textWidth, 2),
@@ -179,7 +198,7 @@ internal static class RenderProbe
             Presentation: form.CurrentPresentation.CapsuleText ?? string.Empty,
             TextInkLeft: stats.InkLeft,
             TextInkRight: stats.InkRight,
-            TextClipped: TextClipped(stats, size, transparent && !editMode));
+            TextClipped: TextClipped(stats, size, transparent && !editMode && !expanded));
     }
 
     private static RenderProbeCaseResult RenderWaitingCase(string outputDirectory, uint dpi)
@@ -275,7 +294,8 @@ internal static class RenderProbe
     private static OverlayLayoutResult CalculateLayout(
         TokenStripForm form,
         uint dpi,
-        IntRect workingArea)
+        IntRect workingArea,
+        bool expanded = false)
     {
         var host = new CodexWindowInfo(
             (IntPtr)1,
@@ -300,9 +320,9 @@ internal static class RenderProbe
         return OverlayLayoutCalculator.Calculate(new OverlayLayoutRequest(
             host,
             AnchorMode.TitleBarTopRight,
-            RequestExpanded: false,
-            ExpandedRowCount: 0,
-            ShowContextProgress: false,
+            RequestExpanded: expanded,
+            ExpandedRowCount: form.CurrentPresentation.ExpandedRows.Count,
+            ShowContextProgress: form.CurrentPresentation.ShowContextProgress,
             ManualCapsuleTopLeft: new Point(240, 200),
             ScalePercent: ManualAttachmentRules.DefaultScalePercent,
             CapsuleSize: capsuleSize));
@@ -353,8 +373,12 @@ internal static class RenderProbe
         using (var graphics = Graphics.FromImage(composite))
         {
             graphics.CompositingMode = CompositingMode.SourceOver;
-            graphics.DrawImageUnscaled(background, 0, 0);
-            graphics.DrawImageUnscaled(surface, 0, 0);
+            graphics.PageUnit = GraphicsUnit.Pixel;
+            // GDI+ DrawImageUnscaled still interprets mismatched source DPI. Both layers must use
+            // explicit pixel rectangles, so a 192-DPI backdrop fully covers a 120/144-DPI surface.
+            var pixels = new Rectangle(0, 0, surface.Width, surface.Height);
+            graphics.DrawImage(background, pixels, 0, 0, background.Width, background.Height, GraphicsUnit.Pixel);
+            graphics.DrawImage(surface, pixels, 0, 0, surface.Width, surface.Height, GraphicsUnit.Pixel);
         }
 
         composite.Save(path, ImageFormat.Png);

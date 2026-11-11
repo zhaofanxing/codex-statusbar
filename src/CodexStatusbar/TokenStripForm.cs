@@ -373,7 +373,7 @@ internal sealed class TokenStripForm : Form
                 true,
                 true,
                 true,
-                "拖动调整位置",
+                OverlayText.Choose(_presentation.Language, "拖动调整位置", "Drag to reposition"),
                 new IntRect(
                     content.Left,
                     content.Top,
@@ -1278,7 +1278,7 @@ internal sealed class TokenStripForm : Form
         var headerHeight = metrics.HeaderHeight;
         DrawAlignedText(
             graphics,
-            "Token 详情",
+            OverlayText.Choose(_presentation.Language, "Token 详情", "Token details"),
             headerFont,
             new Rectangle(content.Left, content.Top, content.Width, headerHeight),
             _palette.Value,
