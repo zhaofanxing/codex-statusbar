@@ -1,7 +1,6 @@
 # CodexStatusbar
 
-<https://github.com/zhaofanxing/codex-statusbar> · MIT licensed · **v1.0.0-rc3** (release candidate,
-feature-frozen)
+<https://github.com/zhaofanxing/codex-statusbar> · MIT licensed · **v1.0.0-rc3** (release candidate)
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -10,22 +9,27 @@ feature-frozen)
 See [Credits and license](#8-credits-and-license) and [third-party notices](THIRD-PARTY-NOTICES.md)
 for the upstream projects, reused work and preserved license notices.
 
-![CodexStatusbar docked in Codex's composer toolbar, immediately left of the Context usage indicator](docs/images/docked-strip.png)
+![Current CodexStatusbar UI: turns, steps, output speed, total tokens, cache hits and context usage](docs/images/statusbar-current.png)
 
 **Get the binary:** download `CodexStatusbar.exe` from the
 [latest release](https://github.com/zhaofanxing/codex-statusbar/releases) — a self-contained 61 MB
-single file, no .NET runtime needed — drop it next to `start-monitor.bat` and run that. The exe is
+single file, no .NET runtime needed — drop it next to
+[`release/start-monitor.bat`](release/start-monitor.bat) and run that. The exe is
 a release asset rather than a committed file, so the repository stays small. `release\` keeps the
 launcher, the release notes and the SHA-256 of the shipped binary.
 
 **Build it yourself:** `pwsh -File build.ps1` (needs the .NET 10 SDK) — see §3.
 
-A lightweight, always-visible status strip for the **official OpenAI Codex Desktop client on
-Windows**. The strip shows generation speed, total tokens, cache hits and context usage.
+A lightweight status strip for the **official OpenAI Codex Desktop client on Windows**. It follows
+the open conversation and shows **turns, steps, output speed, total tokens, cache hits and context usage**.
 
 ```
-⚡ 243 tok/s · 5.7M tok · Cache 98% · 上下文 7%
+4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
+
+The screenshot shows the current UI. At normal widths, once history counts are recovered, the strip
+uses these Chinese labels, including on an English setup. `~` marks a held sample; `≈` marks partial
+response timing coverage. Narrow windows and unavailable counts use shorter variants (§4).
 
 By default it docks **inside Codex's own composer toolbar** — immediately left of the Context usage
 indicator, on the same line as the model selector, microphone and send button. It draws text only
@@ -97,7 +101,7 @@ Display formatting (one decimal place):
 | `1K … 999,999` | `12.4K tok` |
 | `≥ 1M` | `5.7M tok` |
 
-The full integer is always kept internally and shown in the expanded panel / debug log.
+The full integer is always kept internally and shown in the debug log.
 
 It is bound to the **conversation currently open in Codex Desktop**, not to all of `~/.codex`.
 Switching conversation in Codex's sidebar switches the strip (see §4).
@@ -109,13 +113,31 @@ cache_hit_rate = Σ cached_input_tokens / Σ input_tokens × 100%
 ```
 
 Averaged over the **whole conversation**, not just the last turn. Displayed with no decimals
-(`Cache 98%`; `97.88%` in the expanded panel). When `input_tokens == 0` it is `Cache --` —
-never `NaN`, never `0%`.
+(`缓存命中 97%`; the debug log keeps two decimals). When `input_tokens == 0`, it shows
+`缓存命中 --` rather than `NaN` or `0%`. Variants without turn and step counts use the `Cache` label.
+The parser currently reads an absent `cached_input_tokens` field as 0, so a missing field can also
+produce `0%` when input is positive.
 
 ### D. Context window usage
 
 The trailing percentage is the latest request's context usage divided by its model context
 window. The strip shows `上下文 --` until both values are available.
+
+### E. Turns and steps — current conversation, cumulative
+
+`4 轮 46 步` means 4 confirmed started turns and 46 confirmed completed model responses in the
+current conversation:
+
+* **Turns** count distinct `turn_id` values in `task_started` / `turn_started`, including an active turn.
+* **Steps** primarily count `(turn_id, response_id)` pairs in `token_usage_record`. Legacy logs recover
+  steps from `token_count` usage changes that confirm a response completion. The two carriers do not
+  count the same response twice.
+* One turn can contain multiple model responses. **Steps are not tool calls.** Both counts follow
+  the selected conversation and are not combined across conversations.
+
+Counts recover from the start of the log in bounded batches and appear only after reaching the
+current file end. Usage metrics can appear first. A new draft starts at
+`0 轮 0 步 · -- tok/s · 0 tok · 缓存命中 -- · 上下文 --`.
 
 ---
 
@@ -127,6 +149,7 @@ window. The strip shows `上下文 --` until both values are available.
 | Total | rollout cumulative usage (`input + output`) | `state_5.sqlite` → `threads.tokens_used` |
 | Cache | rollout cumulative usage (`cached_input_tokens`, `input_tokens`) | none |
 | Context | latest request usage and `model_context_window` from the rollout | `--` if unavailable |
+| Turns / steps | de-duplicated turn starts and completed model responses in the rollout | legacy `token_count` for steps; counts stay hidden until history recovery catches up |
 | **which conversation is active** | **UI Automation document title → unique conversation name in `state_5.sqlite`** | `codex-ipc` follow broadcasts, then `threads` ordered by `recency_at_ms` |
 | TTFT / turn duration | rollout `event_msg/task_complete` (`time_to_first_token_ms`, `duration_ms`) | none |
 
@@ -155,9 +178,8 @@ TPS uses `token_usage_record.usage` once per `response_id`. The cumulative carri
 
 ### Reading strategy (performance)
 
-* Session files reach 70–270 MB. The file is **never parsed whole**: a bounded **4 MB tail** is
-  read first to recover cumulative usage and turn state, then only **new bytes are parsed** from
-  that offset onward.
+* Session files reach 70–270 MB. **Usage and TPS** recovery starts with a **4 MB tail** to recover
+  cumulative usage and turn state, then only **new bytes are parsed** from that offset onward.
 * If that 4 MB tail yields no cumulative usage, the window is **widened backwards (doubling) until
   usage is found or the file head is reached**, re-parsing each window from scratch so the state
   always reflects the entire window. The fast path stays O(4 MB); the extension is a safety net and
@@ -165,6 +187,9 @@ TPS uses `token_usage_record.usage` once per `response_id`. The cumulative carri
   1 GB corpus.
 * With a new conversation the tail read recovers the totals immediately, so restart recovery is
   instant and history-independent.
+* **Turns and steps** use a separate history reader scanning from the file head in batches of at most
+  **8 MB per poll**. Incomplete counts stay hidden until it catches up; afterwards it reads only new
+  bytes. This does not block the existing tail-based usage recovery.
 * Startup identifies the active thread from the window title. While the title is unavailable,
   the monitor uses the follow broadcasts received during the IPC handshake.
 * No hot-loop scanning of `~/.codex`. Change notification is event-driven (`FileSystemWatcher`)
@@ -179,10 +204,11 @@ TPS uses `token_usage_record.usage` once per `response_id`. The cumulative carri
 | `codex-ipc` unavailable | reconnects with exponential backoff (350 ms → 5 s). If the window title also fails to match, the monitor uses recency in `state_5.sqlite` |
 | Codex restarts / Electron reloads | the monitor reads the new window title and reconnects to the recreated pipe |
 | `initialize` fails or a frame is malformed | the frame is skipped, the listener reconnects; one bad message never kills the listener |
-| app-server/file unavailable | Total and Cache still work from the session file; TPS shows `--` |
+| app-server unavailable | metrics read the rollout directly and do not require external app-server access |
 | rollout format changed | unknown records are ignored, counted, and listed under `Warnings:` in the debug log; the process never crashes |
-| brand-new empty conversation | `⚡ -- tok/s · -- tok · Cache -- · 上下文 --` |
-| no cached field present | `Cache --` |
+| brand-new draft | `0 轮 0 步 · -- tok/s · 0 tok · 缓存命中 -- · 上下文 --` |
+| usage and history counts not yet available | `⚡ -- tok/s · -- tok · Cache -- · 上下文 --`, updated as data arrives |
+| no cached field present | currently read as 0; may display `0%` when input is positive |
 
 ---
 
@@ -203,7 +229,8 @@ one-off manual launch.
 ### From a release
 
 Download `CodexStatusbar.exe` from
-<https://github.com/zhaofanxing/codex-statusbar/releases>, put it beside `start-monitor.bat`, then:
+<https://github.com/zhaofanxing/codex-statusbar/releases>, put it beside
+[`release/start-monitor.bat`](release/start-monitor.bat), then:
 
 ```
 start-monitor.bat
@@ -230,8 +257,8 @@ is empty the launcher falls back to `src\CodexStatusbar\bin\Release\net10.0-wind
 not modify anything outside the repository, and the overlay never writes outside
 `%LOCALAPPDATA%\CodexStatusbar\`.
 
-Requirements: Windows 10/11 x64, Codex Desktop running under the same user. Start the strip after
-Codex Desktop; it will attach as soon as a Codex window is in the foreground.
+Requirements: Windows 10/11 x64, Codex Desktop running under the same user. The strip can start
+before Codex and wait in the tray; it appears when a Codex window is available and in the foreground.
 
 ### Command line
 
@@ -266,14 +293,14 @@ The strip draws **glyphs only**. There is no capsule fill and no border, so Code
 through behind the numbers:
 
 ```
-⚡ 243 tok/s · 5.7M tok · Cache 95%
+4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
 
 It is docked inside Codex's composer toolbar, immediately left of the official **Context usage**
 indicator and on the same line as the model selector, microphone and send button:
 
 ```
-[ + ] [⚠ 完全访问]          ⚡ 192 tok/s · 2.4M tok · Cache 95%   ◔   deepseek-v4.1-flash 高 ⌄   🎙   ↑
+[ + ] [帮我批准]   4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%   ◔   GPT-6.1 Sol Max ⌄   🎙   ■
 ```
 
 And it is built to look like part of that toolbar rather than like a HUD:
@@ -287,8 +314,10 @@ And it is built to look like part of that toolbar rather than like a HUD:
 | shadow | **off** | docked on Codex's own background, the theme match is what carries readability |
 | horizontal padding | 6 DIP each side | the window is sized from the measured text, so there is no fixed width to leave slack in |
 
-The result, measured from the same screenshot as the control it sits beside: the strip's baseline is
-**1 px** from the model selector's, and both reach the same darkest ink `rgb(26, 28, 31)`.
+Historical light-theme measurements put the strip's baseline **1 px** from the model selector's,
+with both reaching the same darkest ink `rgb(26, 28, 31)`. These typography and transparency
+measurements come from earlier probes in
+[`docs/evidence/round2-ui`](docs/evidence/round2-ui/README.md), rather than the current dark screenshot above.
 
 This is real per-pixel transparency, not a key colour: the window is a layered window
 (`WS_EX_LAYERED` + `UpdateLayeredWindow`) painted from a 32-bit premultiplied ARGB surface, so
@@ -352,17 +381,22 @@ contains the model name.
 too narrow, against the real room between the composer's own left-hand controls and the Context
 indicator:
 
-| level | example without turn and step counts |
+With counts available there are seven variants, tried in this order from widest to narrowest.
+While history counts are recovering, only the last five are used:
+
+| order | example |
 |---|---|
-| 0 | `⚡ 192 tok/s · 2.4M tok · Cache 95% · 上下文 7%` |
-| 1 | `⚡ 192 t/s · 2.4M · 95% · 上下文 7%` |
-| 2 | `192 t/s · 2.4M · 95% · 上下文 7%` |
-| 3 | `2.4M · 95% · 上下文 7%` |
-| 4 | `2.4M · 95%` |
+| 1 | `4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%` |
+| 2 | `4轮46步 · ~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 3 | `⚡ ~32 tok/s · 4.5M tok · Cache 97% · 上下文 34%` |
+| 4 | `⚡ ~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 5 | `~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 6 | `4.5M · 97% · 上下文 34%` |
+| 7 | `4.5M · 97%` |
 
 At every normal width the **full** wording is shown; the short forms appear only when the full one
-would collide with Codex's buttons. When even level 4 does not fit, the strip **hides** rather than
-printing text over them. The debug log reports the level, every variant's measured width, and the
+would collide with Codex's buttons. When even the narrowest `4.5M · 97%` does not fit, the strip
+**hides** rather than printing text over them. The debug log reports the level, every variant's measured width, and the
 budget, so a cramped window is distinguishable from a broken selector at a glance.
 
 ### Manual positioning
@@ -439,7 +473,7 @@ While docked the strip needs no adjustment at all. To move it by hand:
 
 ```json
 {
-  "settingsVersion": 3,
+  "settingsVersion": 4,
   "transparentBackground": true,
   "positionMode": "ComposerContextLeft",
   "contextGapDip": 10,
@@ -447,7 +481,9 @@ While docked the strip needs no adjustment at all. To move it by hand:
   "anchor": "TopCenter",
   "offsetX": 0,
   "offsetY": 10,
-  "theme": "Auto"
+  "theme": "Auto",
+  "startWithWindows": true,
+  "startupConfigured": true
 }
 ```
 
@@ -463,12 +499,13 @@ The strip identifies the visible conversation by its title. Its metrics refresh 
 back to a conversation that Codex already follows.
 
 ```
-before switch:  ⚡ 231 tok/s  ·  5.7M tok  ·  Cache 98%
-after  switch:  ⚡ -- tok/s   ·  821K tok  ·  Cache 94%
+before switch: 4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
+after  switch: 1 轮 3 步 · -- tok/s · 821.0K tok · 缓存命中 94% · 上下文 7%
 ```
 
-TPS goes to `--` on switch because the newly selected conversation has no in-flight turn — the
-old conversation's TPS is never shown against the new conversation's tokens.
+In this example the selected conversation has no recoverable response timing, so TPS is `--`.
+Complete paired responses in its own log can also recover its completed TPS. The old conversation's
+TPS is never shown against the new conversation's tokens, and turn and step counts switch too.
 
 A new draft starts with zero turns, steps and tokens. TPS and cache rate show `--` until usage arrives.
 
@@ -683,11 +720,10 @@ regenerates it from *your* Codex build (see §9).
 
 1. **TPS updates at model-response boundaries, not per token.** Because Codex persists no
    streaming deltas and its app-server cannot be joined externally, there is no sub-second
-   signal. During a tool-using turn the number advances every few seconds. During a *single long
-   answer with no tool calls* it stays at the last measured value (shown as `~243 tok/s`) and
-   only updates when that response completes. This is a limitation of what Codex exposes, not a
-   smoothed-over guess — the alternative would be to invent a number, which this project refuses
-   to do.
+   signal. During a tool-using turn the number advances every few seconds. Before a long response
+   completes, the current turn shows `--` if it has no sample yet, or may hold a previous measurement
+   (`~32 tok/s`). It updates only when a response completes with pairable usage and timing. Partial
+   timing coverage uses `≈`, which takes precedence over `~`.
 2. **`codex-ipc` is an internal Codex interface.** A uniquely matched window title can still select
    the conversation if the pipe is unavailable. When both signals are unavailable, the strip uses
    `recency_at_ms` ordering.
@@ -699,7 +735,7 @@ regenerates it from *your* Codex build (see §9).
 5. **Very short turns have noisy TPS.** The model-time signal has roughly millisecond resolution, so
    a response whose whole model window is only tens of milliseconds cannot yield a meaningful rate.
    The value is still shown (it is official data), and the debug log prints the window so you can
-   judge. See the accuracy table in §1A.
+   judge. See §1A for timing and estimation limits.
 6. **Exe is unsigned**, so SmartScreen will warn on first run.
 7. Windows-only. No sub-agent rollouts are merged into a parent conversation's totals (each
    conversation is reported on its own), and `originator == "Codex Desktop"` is required on the
@@ -712,7 +748,8 @@ regenerates it from *your* Codex build (see §9).
    `"theme"` in the settings file). `Auto` follows Codex's own setting, which is what usually makes
    them agree. The worst combination captured is in
    [`locked-transparent-light-144dpi-over-busy.png`](docs/evidence/round2-ui/locked-transparent-light-144dpi-over-busy.png).
-10. **The colour of the `⚡` comes from font fallback.** Segoe UI has no U+26A1, so GDI+ substitutes
+10. **The fallback variants' `⚡` depends on font fallback.** The normal form with turns and steps
+    has no lightning glyph. Segoe UI has no U+26A1, so GDI+ substitutes
     another family. It renders correctly on this machine; if a future Windows drops that fallback the
     glyph would show as a missing-glyph box, and the fix is a font-family list for the leading glyph.
 11. **`Ctrl+Alt+Shift+P` may be taken** by another application. Registration failure is silent and the

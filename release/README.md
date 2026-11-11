@@ -1,16 +1,16 @@
 # CodexStatusbar — 1.0.0-rc3
 
-Release candidate. **Feature-frozen**: no further functional change to the metrics, the token/cache
-arithmetic, IPC conversation binding, the UIA `ComposerContextLeft` positioning, the responsive
-strategy, typography/baseline/theme, the click-through behaviour, or the lifecycle.
+Release candidate. This file describes the current status strip; the rc2/rc3 sections below retain
+the lifecycle and positioning history and measurements.
 
-A read-only, always-visible 3-metric status strip for the **official OpenAI Codex Desktop client on
-Windows**. It is a separate companion process: it does not patch, replace, inject into or hook the
+A read-only status strip for the **official OpenAI Codex Desktop client on Windows**, showing turns,
+steps, output speed, total tokens, cache hits and context usage for the open conversation.
+It is a separate companion process: it does not patch, replace, inject into or hook the
 Codex binary. It reads data Codex already writes, and places one small overlay window next to
 Codex's own composer toolbar using public Win32 APIs.
 
 ```
-⚡ 158 tok/s · 2.6M tok · Cache 90%
+4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
 
 ---
@@ -111,31 +111,40 @@ GUI-subsystem, so the logon launch shows no console window.
 
 ---
 
-## 1. The three metrics — exact definitions
+## 1. Status strip metrics
+
+### Turns and steps
+
+`4 轮 46 步` means 4 confirmed started turns and 46 confirmed completed model responses in the
+current conversation. Turns de-duplicate `task_started` / `turn_started` by `turn_id`, including
+an active turn. Steps primarily count `(turn_id, response_id)` pairs in `token_usage_record`,
+with legacy `token_count` usage changes used when they confirm a response completion. The two
+carriers do not count the same response twice. Steps are not tool calls.
+
+History counts recover from the log head in batches of at most 8 MB per poll and appear only once
+the reader catches up. Usage and TPS recover separately from a 4 MB tail, widened if necessary.
+A new draft starts at `0 轮 0 步 · -- tok/s · 0 tok · 缓存命中 -- · 上下文 --`.
 
 ### TPS
 
 ```
-TPS = 最近一次模型生成的 model throughput，
-      基于官方 output token usage 和模型活动区间推导。
+turn_tps = 1000 × Σ paired response output_tokens ÷ Σ paired response generation_ms
 ```
 
-`1000 × Σ(official output_tokens of the last turn's model responses) ÷ |union of that turn's
-Reasoning and AgentMessage item windows|`.
+Each `token_usage_record` contributes its official `usage.output_tokens` once per `response_id`.
+Its generation window runs from the earliest observed `Reasoning` / `AgentMessage` start to the
+usage timestamp, including tool-argument generation. First-output waiting and time between
+responses are excluded. A response without reliable usage and timing does not contribute to the ratio.
 
-- The numerator is always the official `output_tokens` from Codex — never a character count, never
-  `chars / 4`.
-- The denominator is the time the model actually spent emitting output: tool execution, user think
-  time, queue time and whole-turn wall clock are excluded by construction.
-- It is an **interval union**, not a sum: `[0s,5s]` + `[4s,10s]` is 10 s, not 11 s.
-- Shown as `~192 tok/s` while held across a tool call, `-- tok/s` when unmeasurable. Never estimated,
-  never `0`.
+Live samples use an exponential moving average; turn completion keeps the unsmoothed ratio of the
+paired totals. This is an estimate from rollout timestamps, not a live per-token measurement.
+`~32 tok/s` marks a held sample; `≈32 tok/s` marks partial response timing coverage and takes
+precedence over `~`. With no usable pair, the strip shows `-- tok/s`.
 
 ### Total Token
 
 ```
-Total Token = 当前 conversation 累计 input + output，
-              cached input 不重复计算。
+conversation_total_tokens = Σ input_tokens + Σ output_tokens
 ```
 
 `total = Σ input_tokens + Σ output_tokens` — **never** `input + cached + output`, which would count
@@ -145,33 +154,51 @@ carriers Codex writes (`token_count` and `token_usage_record`), and it follows c
 ### Cache
 
 ```
-Cache = 当前 conversation 累计 cached_input / input。
+cache_hit_rate = Σ cached_input_tokens / Σ input_tokens × 100%
 ```
 
-`Σ cached_input_tokens ÷ Σ input_tokens × 100%`. Rendered as `--` — never `0%`, never `NaN` — when
-`input == 0` or the cached field is absent.
+The full form shows `缓存命中 97%`; usage-only fallbacks use `Cache`. With `input == 0`, the rate is
+`--`. The parser currently reads an absent cached field as 0, which can produce `0%` when input is positive.
+
+### Context usage
+
+`上下文 34%` is the latest request's context usage divided by the model context window, separate
+from cumulative conversation tokens. Missing usage or window size produces `上下文 --`.
 
 ---
 
 ## 2. Default UI
 
 ```
-⚡ 158 tok/s · 2.6M tok · Cache 90%
+4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
 
-One line, always visible, no click. Defaults:
+One line in the composer toolbar while Codex is in the foreground and enough space is available.
+The full form uses Chinese labels, including on an English setup. Defaults:
 
 | default | value |
 |---|---|
 | **Dock** | inside Codex's composer toolbar, immediately left of the Context usage indicator, on the same row as the model selector, microphone and send button |
 | **Auto theme** | Codex's own `--app-color-text-foreground`: light `#1a1c1f`, dark `#dfdfdf` |
 | **Full click-through** | every pixel, including the glyph pixels, is transparent to the mouse; the strip never takes focus and never appears in Alt+Tab |
-| **Responsive variants** | four measured widths; it steps down to a shorter form rather than overlapping the controls to its left |
+| **Responsive variants** | seven measured widths with counts, five while history counts are unavailable; shorter forms keep clear of the controls to the left |
 | **Start with Windows** | on (see above) |
 
-Text only — no capsule, no border — with real per-pixel transparency, so Codex's chrome shows
-through. Responsive ladder: `⚡ 192 tok/s · 2.4M tok · Cache 95%` → `⚡ 192 t/s · 2.4M · 95%` →
-`192 t/s · 2.4M · 95%` → `2.4M · 95%`.
+Text only — no capsule, no border — with real per-pixel transparency, so Codex's chrome shows through.
+The responsive ladder, from widest to narrowest:
+
+| order | example |
+|---|---|
+| 1 | `4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%` |
+| 2 | `4轮46步 · ~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 3 | `⚡ ~32 tok/s · 4.5M tok · Cache 97% · 上下文 34%` |
+| 4 | `⚡ ~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 5 | `~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 6 | `4.5M · 97% · 上下文 34%` |
+| 7 | `4.5M · 97%` |
+
+Until counts are recovered, only the last five forms are used. If the narrowest form cannot fit,
+the strip hides instead of overlapping Codex's controls.
 
 **Click-through consequence:** the locked strip is fully mouse-transparent, so the detail panel is
 opened from the tray (**`详情面板 · 展开 / 收起`**), not by clicking the numbers.
@@ -200,8 +227,8 @@ start-monitor.bat --debug
 ```
 
 `start-monitor.bat` is kept for debugging, troubleshooting and a one-off manual launch — with
-"Start with Windows" on, normal use never needs it. Start it **after** Codex Desktop when launching
-by hand.
+"Start with Windows" on, normal use never needs it. No launch order is required when starting
+by hand; the strip can also start first and wait in the tray for Codex.
 
 Requirements: Windows 10/11 x64 and Codex Desktop under the same user account; the build is
 self-contained, so no .NET runtime is needed. No administrator rights, and nothing is written outside
@@ -297,9 +324,9 @@ anyway*). That is expected for a release candidate.
 
 ## 8. Known limitations
 
-- Fallback positioning levels (`uia-model`, `uia-composer`, `window-fallback`) use measured DIP
-  constants — graceful degradation, not equivalent to the UIA Context reference.
-- The `⚡` glyph depends on GDI+ font fallback.
+- `uia-model` positioning uses a measured 20 DIP offset when the Context control is unavailable.
+  Automatic docking hides the strip when neither the Context indicator nor the model selector can be measured.
+- The fallback variants' `⚡` glyph depends on GDI+ font fallback; the full form with turns and steps has no lightning glyph.
 - `Ctrl+Alt+Shift+P` may already be taken by another application; the tray menu still works.
 - Process detection uses a 2 s poll while Codex is absent, because the unprivileged event-driven
   alternatives (`Win32_ProcessStartTrace`) require administrator rights. While Codex is present the

@@ -2,9 +2,9 @@
 
 **简体中文** · [English](README.md)
 
-![CodexStatusbar 停靠在 Codex 输入框底栏、Context 指示器左侧](docs/images/docked-strip.png)
+![CodexStatusbar 当前界面：轮数、步数、输出速度、累计 token、缓存命中率和上下文占用](docs/images/statusbar-current.png)
 
-<https://github.com/zhaofanxing/codex-statusbar> · MIT 许可 · **v1.0.0-rc3**（release candidate，功能已冻结）
+<https://github.com/zhaofanxing/codex-statusbar> · MIT 许可 · **v1.0.0-rc3**（release candidate）
 
 **项目来源：** 本仓库基于 [dongyue-19/codex-statusbar](https://github.com/dongyue-19/codex-statusbar)
 继续修改和维护。上游项目、复用范围与保留的许可声明详见[致谢与许可](#8-致谢与许可)和
@@ -12,17 +12,20 @@
 
 **获取可执行文件：** 从 [最新 release](https://github.com/zhaofanxing/codex-statusbar/releases) 下载
 `CodexStatusbar.exe` —— 自包含的 61 MB 单文件，不需要安装 .NET 运行时 —— 把它放到
-`start-monitor.bat` 旁边然后运行该脚本。exe 是 release 附件而不是提交进仓库的文件，因此仓库体积
-保持在源码量级。`release\` 里保留启动脚本、发布说明与所发布二进制的 SHA-256。
+[`release/start-monitor.bat`](release/start-monitor.bat) 旁边然后运行该脚本。exe 是 release 附件而不是
+提交进仓库的文件，因此仓库体积保持在源码量级。`release\` 里保留启动脚本、发布说明与所发布二进制的 SHA-256。
 
 **自行构建：** `pwsh -File build.ps1`（需要 .NET 10 SDK）—— 见 §3。
 
-一个轻量、始终可见的状态条，面向 **Windows 上的官方 OpenAI Codex Desktop 客户端**。它直接显示
-输出速度、总 token、缓存命中率和上下文窗口占用。
+一个轻量的状态条，面向 **Windows 上的官方 OpenAI Codex Desktop 客户端**，跟随当前打开的对话显示
+**轮数、步数、输出速度、累计 token、缓存命中率和上下文窗口占用**。
 
 ```
-⚡ 243 tok/s · 5.7M tok · Cache 98% · 上下文 7%
+4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
+
+上图是当前界面的实际截图。正常宽度且历史计数恢复完成时，状态条使用这套中文措辞；`~` 表示暂时
+保留上一采样值，`≈` 表示只有部分响应具备可靠计时。空间不足或计数尚未就绪时，会使用较短的形式（§4）。
 
 默认情况下它停靠**在 Codex 自己的输入框底栏内部** —— 紧贴 Context 用量指示器的左侧，与模型
 选择器、麦克风和发送按钮在同一行。它只在完全透明的背景上绘制文字，因此读起来像是 Codex 界面的
@@ -89,7 +92,7 @@ wrong formula  4,195,423   = input + cached + output
 | `1K … 999,999` | `12.4K tok` |
 | `≥ 1M` | `5.7M tok` |
 
-完整整数在内部始终保留，并在展开面板 / 调试日志中显示。
+完整整数在内部始终保留，并在调试日志中显示。
 
 它绑定的是 **Codex Desktop 里当前打开的那个对话**，而不是整个 `~/.codex`。在 Codex 侧栏里切换
 对话会切换状态条（见 §4）。
@@ -100,12 +103,26 @@ wrong formula  4,195,423   = input + cached + output
 cache_hit_rate = Σ cached_input_tokens / Σ input_tokens × 100%
 ```
 
-在**整个对话**上取平均，而不只是最后一轮。显示时不带小数（`Cache 98%`；展开面板中是
-`97.88%`）。当 `input_tokens == 0` 时它显示 `Cache --` —— 绝不是 `NaN`，绝不是 `0%`。
+在**整个对话**上取平均，而不只是最后一轮。显示时不带小数（`缓存命中 97%`；调试日志保留两位
+小数）。当 `input_tokens == 0` 时显示 `缓存命中 --`，不显示 `NaN` 或 `0%`。
+省略轮数和步数的回退形式使用 `Cache` 标签。当前解析器将缺失的 `cached_input_tokens` 按 0 读取；
+因此输入量大于 0 时，缺失字段也可能显示为 `0%`。
 
 ### D. 上下文窗口占用
 
 右端百分比由最近一次请求的上下文用量除以模型上下文窗口大小得出。数据缺失时显示 `上下文 --`。
+
+### E. 轮数与步数 —— 当前对话的累计进度
+
+`4 轮 46 步` 表示当前对话中已确认开始的 4 轮，以及已确认完成的 46 次模型响应：
+
+* **轮数**按 `task_started` / `turn_started` 的 `turn_id` 去重，包含已经开始但尚未结束的轮次。
+* **步数**优先按 `token_usage_record` 的 `(turn_id, response_id)` 统计；旧版日志通过能确认响应完成的
+  `token_count` 用量变化兼容恢复。两种载体报告同一响应时不会重复计步。
+* 一轮可以包含多次模型响应，**步数不是工具调用次数**。两项都跟随当前对话，不跨会话累加。
+
+计数会从日志开头分批恢复；追上当前文件末尾后才显示，期间仍可显示已恢复的用量指标。
+新建草稿从 `0 轮 0 步 · -- tok/s · 0 tok · 缓存命中 -- · 上下文 --` 开始。
 
 ---
 
@@ -117,6 +134,7 @@ cache_hit_rate = Σ cached_input_tokens / Σ input_tokens × 100%
 | Total | rollout 中的累计用量（`input + output`） | `state_5.sqlite` → `threads.tokens_used` |
 | Cache | rollout 中的累计用量（`cached_input_tokens`、`input_tokens`） | 无 |
 | 上下文占用 | rollout 中的最近请求用量与 `model_context_window` | 数据缺失时显示 `--` |
+| 轮数 / 步数 | rollout 中去重后的轮次开始事件与模型响应完成记录 | 步数兼容旧版 `token_count`；历史恢复完成前不显示计数 |
 | **当前活跃的是哪个对话** | **UI Automation 主文档标题 → `state_5.sqlite` 中唯一的会话名称** | `codex-ipc` 的 `thread-stream-following-changed` 广播，其次是 `recency_at_ms` 排序 |
 | TTFT / 轮次时长 | rollout 的 `event_msg/task_complete`（`time_to_first_token_ms`、`duration_ms`） | 无 |
 
@@ -143,13 +161,15 @@ TPS 只使用 `token_usage_record.usage`，按 `response_id` 去重。两个累�
 
 ### 读取策略（性能）
 
-* 会话文件可达 70–270 MB。文件**从不被整篇解析**：先读取有界的 **4 MB 尾部**以恢复累计用量与
-  轮次状态，然后只从该偏移开始解析**新增的字节**。
+* 会话文件可达 70–270 MB。**用量与 TPS** 先读取 **4 MB 尾部**以恢复累计用量与轮次状态，
+  然后只从该偏移开始解析**新增的字节**。
 * 如果这个 4 MB 尾部没有给出累计用量，则把窗口**向后加宽（每次翻倍）直到找到用量或到达文件
   开头**，每个窗口都从头重新解析，以便状态始终反映整个窗口。快路径仍是 O(4 MB)；扩展只是安全
   网，调试日志会给它打标记（`tail-window-extended:<n>MB`）。在一个 501 个文件、1 GB 的语料库上
   它一次都没有发生过。
 * 面对新对话，尾部读取会立即恢复合计，因此重启恢复是瞬时的，且与历史长度无关。
+* **轮数与步数**使用独立的历史读取器，从文件开头按每次最多 **8 MB** 分批扫描；追上末尾之前不
+  显示不完整的计数。追上之后只读取新增内容，不阻塞已有的尾部用量恢复。
 * 启动时使用窗口标题识别当前对话。窗口标题暂时不可用时，使用 IPC 握手期间收到的跟随列表。
 * 不热循环扫描 `~/.codex`。变更通知是事件驱动的（`FileSystemWatcher`），配合基于偏移的增量
   解析，所以每次更新的代价是 O(新增字节)。
@@ -163,10 +183,11 @@ TPS 只使用 `token_usage_record.usage`，按 `response_id` 去重。两个累�
 | `codex-ipc` 不可用 | 以指数退避（350 ms → 5 s）重连。窗口标题也无法匹配时，按 `state_5.sqlite` 的最近活跃顺序回退 |
 | Codex 重启 / Electron 重新加载 | 监控器重新读取窗口标题并连接重建后的管道 |
 | `initialize` 失败或某个帧畸形 | 跳过该帧，监听器重连；一条坏消息永远不会干掉监听器 |
-| app-server / 文件不可用 | Total 与 Cache 仍能从会话文件工作；TPS 显示 `--` |
+| app-server 不可用 | 指标直接读取 rollout 文件，不依赖外部接入 app-server |
 | rollout 格式变了 | 未知记录被忽略、被计数，并列入调试日志的 `Warnings:`；进程永不崩溃 |
-| 全新的空对话 | `⚡ -- tok/s · -- tok · Cache -- · 上下文 --` |
-| 不存在 cached 字段 | `Cache --` |
+| 全新的草稿 | `0 轮 0 步 · -- tok/s · 0 tok · 缓存命中 -- · 上下文 --` |
+| 用量和历史计数均未取得 | `⚡ -- tok/s · -- tok · Cache -- · 上下文 --`，取得数据后更新 |
+| 不存在 cached 字段 | 当前按 0 读取；输入量大于 0 时可能显示 `0%` |
 
 ---
 
@@ -185,7 +206,7 @@ TPS 只使用 `token_usage_record.usage`，按 `response_id` 去重。两个累�
 ### 从 release 安装
 
 从 <https://github.com/zhaofanxing/codex-statusbar/releases> 下载 `CodexStatusbar.exe`，把它放在
-`start-monitor.bat` 旁边，然后：
+[`release/start-monitor.bat`](release/start-monitor.bat) 旁边，然后：
 
 ```
 start-monitor.bat
@@ -210,8 +231,8 @@ pwsh -File build.ps1 -SkipTest    # build + publish only
 启动脚本会退回到 `src\CodexStatusbar\bin\Release\net10.0-windows\`。构建不会修改仓库之外的任何
 东西，覆盖窗口也从不写入 `%LOCALAPPDATA%\CodexStatusbar\` 之外的位置。
 
-运行要求：Windows 10/11 x64，且 Codex Desktop 在同一用户下运行。请在 Codex Desktop 之后启动
-状态条；一旦有 Codex 窗口位于前台，它就会附着上去。
+运行要求：Windows 10/11 x64，且 Codex Desktop 在同一用户下运行。状态条可以先于 Codex 启动，
+它会在托盘等待；Codex 窗口出现并位于前台后自动显示。
 
 ### 命令行
 
@@ -245,14 +266,14 @@ pwsh -File build.ps1 -SkipTest    # build + publish only
 从数字背后透出：
 
 ```
-⚡ 243 tok/s · 5.7M tok · Cache 95%
+4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
 ```
 
 它停靠在 Codex 输入框（composer）的底栏内，紧贴官方 **Context 用量**指示器的左侧，与模型选择器、
 麦克风和发送按钮在同一行：
 
 ```
-[ + ] [⚠ 完全访问]          ⚡ 192 tok/s · 2.4M tok · Cache 95%   ◔   deepseek-v4.1-flash 高 ⌄   🎙   ↑
+[ + ] [帮我批准]   4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%   ◔   GPT-6.1 Sol Max ⌄   🎙   ■
 ```
 
 而且它的设计目标是看起来像那条工具栏的一部分，而不是像一个 HUD：
@@ -266,8 +287,9 @@ pwsh -File build.ps1 -SkipTest    # build + publish only
 | 阴影 | **关闭** | 停靠在 Codex 自身背景上时，靠主题匹配来保证可读性 |
 | 水平内边距 | 每侧 6 DIP | 窗口按实测文本定尺寸，所以不存在要留白余量的固定宽度 |
 
-结果，与它所依附的控件取自同一张截图来测量：状态条的基线距模型选择器的基线 **1 px**，两者达到的
-最深墨色都是 `rgb(26, 28, 31)`。
+早期浅色主题的测量中，状态条的基线距模型选择器的基线 **1 px**，两者达到的最深墨色都是
+`rgb(26, 28, 31)`。这些排版测量与下述透明度证据来自历史探针，见
+[`docs/evidence/round2-ui`](docs/evidence/round2-ui/README.md)，不是上方当前深色截图的测量结果。
 
 这是真正的逐像素透明（per-pixel transparency），不是设置某个键控颜色：窗口是一个分层窗口
 （layered window）（`WS_EX_LAYERED` + `UpdateLayeredWindow`），由一个 32 位预乘（premultiplied）
@@ -324,15 +346,19 @@ strip.centreY = toolbar row centre                          (the model selector'
 **响应式（responsive）。** 状态条按实测文本定尺寸，只有当 Codex 确实过窄时才缩短，判断依据是
 输入框自身左侧控件与 Context 指示器之间真实剩余的空间：
 
-| 级别 | 不含轮数和步数的示例 |
-|---|---|
-| 0 | `⚡ 192 tok/s · 2.4M tok · Cache 95% · 上下文 7%` |
-| 1 | `⚡ 192 t/s · 2.4M · 95% · 上下文 7%` |
-| 2 | `192 t/s · 2.4M · 95% · 上下文 7%` |
-| 3 | `2.4M · 95% · 上下文 7%` |
-| 4 | `2.4M · 95%` |
+计数可用时共有七种形式，按以下顺序选择能放下的最完整版本；历史计数尚未恢复时只使用后五种：
 
-正常宽度下显示**完整**措辞。空间不足时使用较短的变体。当连级别 4
+| 顺序 | 示例 |
+|---|---|
+| 1 | `4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%` |
+| 2 | `4轮46步 · ~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 3 | `⚡ ~32 tok/s · 4.5M tok · Cache 97% · 上下文 34%` |
+| 4 | `⚡ ~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 5 | `~32 t/s · 4.5M · 97% · 上下文 34%` |
+| 6 | `4.5M · 97% · 上下文 34%` |
+| 7 | `4.5M · 97%` |
+
+正常宽度下显示**完整**措辞。空间不足时使用较短的变体。当连最窄的 `4.5M · 97%`
 都放不下时，状态条会**隐藏**，而不是把文字压在按钮上。调试日志会报告级别、每个变体的实测宽度和
 预算，因此"窗口太挤"和"选择器坏了"可以一眼区分。
 
@@ -405,7 +431,7 @@ Anchor = TopRight      OffsetX = -24 DIP      OffsetY = +16 DIP
 
 ```json
 {
-  "settingsVersion": 3,
+  "settingsVersion": 4,
   "transparentBackground": true,
   "positionMode": "ComposerContextLeft",
   "contextGapDip": 10,
@@ -413,7 +439,9 @@ Anchor = TopRight      OffsetX = -24 DIP      OffsetY = +16 DIP
   "anchor": "TopCenter",
   "offsetX": 0,
   "offsetY": 10,
-  "theme": "Auto"
+  "theme": "Auto",
+  "startWithWindows": true,
+  "startupConfigured": true
 }
 ```
 
@@ -427,12 +455,12 @@ Anchor = TopRight      OffsetX = -24 DIP      OffsetY = +16 DIP
 状态条使用当前窗口的会话名称识别侧栏切换。切回已在跟随列表中的对话时，也会刷新各项指标。
 
 ```
-before switch:  ⚡ 231 tok/s  ·  5.7M tok  ·  Cache 98%
-after  switch:  ⚡ -- tok/s   ·  821K tok  ·  Cache 94%
+切换前：4 轮 46 步 · ~32 tok/s · 4.5M tok · 缓存命中 97% · 上下文 34%
+切换后：1 轮 3 步 · -- tok/s · 821.0K tok · 缓存命中 94% · 上下文 7%
 ```
 
-切换时 TPS 变成 `--`，因为新选中的对话没有进行中的轮次 —— 旧对话的 TPS 绝不会被拿来对着新对话
-的 token 显示。
+示例中，新选中对话没有可恢复的可靠计时，TPS 显示 `--`；若其日志中有完整的已配对响应，也可恢复
+该对话自己的已完成 TPS。旧对话的 TPS 不会与新对话的 token 混用，轮数和步数同样按对话切换。
 
 新建草稿从 `0 轮 0 步` 和 `0 tok` 开始。收到用量前，TPS 和缓存命中率显示 `--`。
 
@@ -639,9 +667,8 @@ schema，这样事件词汇表可以对着任何未来版本重新核对而不�
 
 1. **TPS 在模型响应的边界更新，而不是按 token 更新。** 因为 Codex 不持久化任何流式增量，而它的
    app-server 无法被外部接入，所以不存在亚秒级信号。在带工具调用的轮次里，这个数字每隔几秒推进
-   一次。在*没有工具调用的单次长回答*期间，它保持在上一次测得的值（显示为 `~243 tok/s`），只有
-   当该响应结束时才更新。这是 Codex 暴露能力的限制，不是"抹平了的猜测" —— 另一种做法是编一个
-   数字出来，而这个项目拒绝那样做。
+   一次。在单次长回答结束前，当前轮尚无采样时显示 `--`，已有采样则可能保留上一测量值（`~32 tok/s`）；
+   只有响应结束并取得可配对的用量与计时后才更新。部分响应缺少可靠计时时使用 `≈`，且该标记优先于 `~`。
 2. **`codex-ipc` 是 Codex 的内部接口。** 管道不可用时，状态条仍可通过可唯一匹配的窗口标题跟随。
    两种信号都不可用时，按 `recency_at_ms` 排序回退。
 3. **多窗口回退有局限。** 回退到 IPC 时，状态条使用最近收到的跟随广播，而覆盖窗口附着在前台。
@@ -650,7 +677,7 @@ schema，这样事件词汇表可以对着任何未来版本重新核对而不�
    状态条回退到 IPC，已在跟随列表中的对话可能没有新的切换广播。
 5. **极短的轮次 TPS 噪声很大。** 模型时间信号的粒度约为毫秒级，因此整个模型时间窗只有几十毫秒的
    响应算不出有意义的速度。数值仍然会显示（它确实是官方数据），调试日志会打印该时间窗供你判断。
-   见 §1A 的精度表。
+   计时与估算限制见 §1A。
 6. **exe 未签名**，所以首次运行会触发 SmartScreen 警告。
 7. 仅支持 Windows。子代理（sub-agent）的 rollout 不会被并入父对话的合计（每个对话各自单独报告），
    并且要求第一行为 `originator == "Codex Desktop"`，因此重放父会话的子代理 rollout 不会被误认。
@@ -662,8 +689,9 @@ schema，这样事件词汇表可以对着任何未来版本重新核对而不�
    组合在
    [`locked-transparent-light-144dpi-over-busy.png`](docs/evidence/round2-ui/locked-transparent-light-144dpi-over-busy.png)
    里。
-10. **`⚡` 的颜色来自字体回退。** Segoe UI 没有 U+26A1，所以 GDI+ 会替换成另一个字体族。它在这台
-    机器上渲染正常；如果将来的 Windows 去掉了那个回退字体，该字形会显示为缺字方块
+10. **回退形式中的 `⚡` 依赖字体回退。** 带轮数和步数的正常形式不显示该图标。Segoe UI 没有 U+26A1，
+    所以 GDI+ 会替换成另一个字体族。它在这台机器上渲染正常；如果将来的 Windows 去掉了那个回退字体，
+    该字形会显示为缺字方块
     （missing-glyph box），修法是为开头的字形指定一个字体族列表。
 11. **`Ctrl+Alt+Shift+P` 可能已被占用**，被别的应用占着。注册失败是静默的，托盘菜单仍然可用；
     如果热键没反应，用 `--hotkey-probe` 查一下。注意：状态条正在运行时 `--hotkey-probe` 会按设计
