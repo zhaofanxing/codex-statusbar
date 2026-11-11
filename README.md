@@ -11,12 +11,15 @@ for the upstream projects, reused work and preserved license notices.
 
 ![Current CodexStatusbar UI: turns, steps, output speed, total tokens, cache hits and context usage](docs/images/statusbar-current.png)
 
-**Get the binary:** download `CodexStatusbar.exe` from the
-[latest release](https://github.com/zhaofanxing/codex-statusbar/releases) — a self-contained 61 MB
-single file, no .NET runtime needed — drop it next to
-[`release/start-monitor.bat`](release/start-monitor.bat) and run that. The exe is
-a release asset rather than a committed file, so the repository stays small. `release\` keeps the
-launcher, the release notes and the SHA-256 of the shipped binary.
+**Download v1.0.0-rc3 (Windows x64):**
+
+- [Standalone `.exe`](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar.exe) — self-contained, no .NET runtime needed.
+- [Complete ZIP (recommended)](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar-v1.0.0-rc3-win-x64.zip) — includes the executable, launcher, licenses, third-party notices and self-test fixtures.
+
+Extract the ZIP and run `start-monitor.bat`, or run the standalone `.exe` directly.
+See the [release notes and checksums](https://github.com/zhaofanxing/codex-statusbar/releases/tag/v1.0.0-rc3)
+for verification details. The binaries are release assets rather than committed files, so the repository
+stays small. `release\` keeps the launcher, the release notes and the SHA-256 of the shipped binary.
 
 **Build it yourself:** `pwsh -File build.ps1` (needs the .NET 10 SDK) — see §3.
 
@@ -228,16 +231,19 @@ one-off manual launch.
 
 ### From a release
 
-Download `CodexStatusbar.exe` from
-<https://github.com/zhaofanxing/codex-statusbar/releases>, put it beside
-[`release/start-monitor.bat`](release/start-monitor.bat), then:
+Download and extract the [complete ZIP (recommended)](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar-v1.0.0-rc3-win-x64.zip).
+It includes the launcher and license files. Then run:
 
 ```
 start-monitor.bat
 ```
 
+Alternatively, download the [standalone `.exe`](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar.exe)
+and launch it directly.
+
 The published build is self-contained, so no .NET runtime installation is needed. Verify the
-download against `release\SHA256.txt` first:
+download against [`SHA256SUMS.txt`](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/SHA256SUMS.txt)
+(or `SHA256.txt` inside the ZIP):
 
 ```powershell
 Get-FileHash .\CodexStatusbar.exe -Algorithm SHA256

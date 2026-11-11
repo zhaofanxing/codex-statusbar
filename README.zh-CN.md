@@ -10,10 +10,14 @@
 继续修改和维护。上游项目、复用范围与保留的许可声明详见[致谢与许可](#8-致谢与许可)和
 [第三方声明](THIRD-PARTY-NOTICES.md)。
 
-**获取可执行文件：** 从 [最新 release](https://github.com/zhaofanxing/codex-statusbar/releases) 下载
-`CodexStatusbar.exe` —— 自包含的 61 MB 单文件，不需要安装 .NET 运行时 —— 把它放到
-[`release/start-monitor.bat`](release/start-monitor.bat) 旁边然后运行该脚本。exe 是 release 附件而不是
-提交进仓库的文件，因此仓库体积保持在源码量级。`release\` 里保留启动脚本、发布说明与所发布二进制的 SHA-256。
+**下载 v1.0.0-rc3（Windows x64）：**
+
+- [独立 `.exe`](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar.exe)：自包含单文件，不需要安装 .NET 运行时。
+- [完整 ZIP（推荐）](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar-v1.0.0-rc3-win-x64.zip)：包含可执行文件、启动脚本、许可证、第三方声明和自测样例。
+
+ZIP 解压后运行 `start-monitor.bat`，独立 `.exe` 也可直接启动。
+版本与校验信息见[发布说明](https://github.com/zhaofanxing/codex-statusbar/releases/tag/v1.0.0-rc3)。
+二进制作为 release 附件发布，因此仓库体积保持在源码量级。`release\` 里保留启动脚本、发布说明与所发布二进制的 SHA-256。
 
 **自行构建：** `pwsh -File build.ps1`（需要 .NET 10 SDK）—— 见 §3。
 
@@ -205,14 +209,18 @@ TPS 只使用 `token_usage_record.usage`，按 `response_id` 去重。两个累�
 
 ### 从 release 安装
 
-从 <https://github.com/zhaofanxing/codex-statusbar/releases> 下载 `CodexStatusbar.exe`，把它放在
-[`release/start-monitor.bat`](release/start-monitor.bat) 旁边，然后：
+推荐下载[完整 ZIP](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar-v1.0.0-rc3-win-x64.zip)
+并解压，包内已包含启动脚本和许可证文件，然后运行：
 
 ```
 start-monitor.bat
 ```
 
-发布的构建是自包含的，因此不需要安装 .NET 运行时。先对照 `release\SHA256.txt` 校验下载：
+如只需要单个文件，也可下载[独立 `.exe`](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/CodexStatusbar.exe) 后直接启动。
+
+发布的构建是自包含的，因此不需要安装 .NET 运行时。先对照
+[`SHA256SUMS.txt`](https://github.com/zhaofanxing/codex-statusbar/releases/download/v1.0.0-rc3/SHA256SUMS.txt)
+（或 ZIP 内的 `SHA256.txt`）校验下载：
 
 ```powershell
 Get-FileHash .\CodexStatusbar.exe -Algorithm SHA256
